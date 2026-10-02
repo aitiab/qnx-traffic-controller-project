@@ -14,18 +14,88 @@ log_buffer_t pulses_to_central = {
 	.cond 	= PTHREAD_COND_INITIALIZER
 };
 
-// Message handling
+// Connection details to central controller
 server_con_details_t central_con_details = {
-	.connection_established = 0,
-	.server_coid = -1,
+	.established = 0,
+	.coid = -1,
 	.client_identifier = 101, // need to discuss with the central controller
 	.sname = QNET_CENTRAL_CONTROLLER_ATTACH_POINT, // What's the consequence of this?
 	.status = STATUS_RUNNING
 };
 
+server_create_details_t central_server_details = {
+	.name = TRAIN_CONTROLLER_ATTACH_POINT,
+	.established = 0,
+	.attach = NULL,
+	.status = STATUS_RUNNING
+};
+
+void *server_train_controller(void *arg)
+{
+	
+	// Need to worry about if establish_server fails, it should send the train in SYS_FAULT state.
+	int rc = establish_server(&central_server_details);
+	if (rc == EXIT_FAILURE)
+	{
+		central_server_details.status = STATUS_FAILED;
+		printf("[Error] Failed to establish server for the train controller.\nserver_train_controller thread is exiting\n");
+		return (void *)EXIT_FAILURE;
+	}
+
+	recv_t recv;
+	while (1)
+	{
+		// Do i need to use the msg_info?
+		int rcvid = MsgReceive(central_server_details.attach->chid, &recv, sizeof(recv), NULL);
+		if (rcvid == -1)
+		{
+			printf("[TrainServer: Warning] Failed to receive message. Error is %s\n", strerror(errno));
+			continue;
+		}
+
+		if (rcvid == 0)
+		{
+			// Pulse received
+			printf("[TrainServer: System] Pulse received. Code is %d, Value is %d\n", recv.pulse.code, recv.pulse.value);
+		
+			switch (recv.pulse.code)
+			{
+				// Find someway to connect clientID with scoid.
+				// Use value to let client decide cancel/or not?
+				
+				case _PULSE_CODE_DISCONNECT:
+					printf("[TrainServer: System] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
+					// Free any state kept with client
+					client_disconnect_handler(recv.pulse.scoid);
+					ConnectDetach(recv.pulse.scoid);
+					break;
+				case _PULSE_CODE_UNBLOCK:
+					printf("[TrainServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
+					break;
+				
+				default:
+					printf("[TrainServer: Warning] Received unknown pulse code %d from central controller. Value is %d\n", recv.pulse.code, recv.pulse.value);
+					break;
+			}
+		}
+
+
+		if (rcvid > 0)
+		{
+			// Message received
+			printf("[TrainServer: System] Received message from central controller. Type is %d, Data is %d\n", recv.msg.type, recv.msg.data);
+			reply_t reply = {
+				.data = 0 // Just a dummy reply for now.
+			};
+			if (MsgReply(rcvid, EOK, &reply, sizeof(reply)) == -1)
+			{
+				printf("[TrainServer: Error] Failed to reply to the message from central controller. Error is %s\n", strerror(errno));
+			}
+		}
+	}
+}
 
 // Need to handle lost updates.
-
 void *subserver_central_messenger(void *arg)
 {
 	// Employee handling messages to central server asynchronously

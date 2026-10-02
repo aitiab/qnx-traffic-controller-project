@@ -24,39 +24,78 @@ int establish_connection(server_con_details_t *details)
 	if (details->client_identifier <= _PULSE_CODE_MINAVAIL || details->client_identifier > _PULSE_CODE_MAXAVAIL)
 	{
 		printf("[MH: Error] Client_identifier (%d) is used as pulse code, must be greater than %d\n", details->client_identifier, _PULSE_CODE_MINAVAIL);
-		return MH_EXIT_CLIENTID_ISSUE;
+		return MH_EXIT_CLIENTID_ISSUE; // does this error code conflict with other error codes?
 	}
 
-	if (details->connection_established == 1)
+	if (details->established == 1)
 	{
-		name_close(details->server_coid);
-		details->connection_established = 0;
+		name_close(details->coid);
+		details->established = 0;
 		printf("[MH: System] Old connection closed. Will establish new connection\n");
 	}
 
 	printf("[MH: System] Trying to connect to server named: %s\n", details->sname);
 
-	if ((details->server_coid = name_open(details->sname, 0)) == -1)
+	if ((details->coid = name_open(details->sname, 0)) == -1)
 	{
-		printf("[MH: Error] Could not connect to the server: %s\n", details->sname);
-		return EXIT_FAILURE;
+		printf("[MH: Error] Could not connect to the server: %s\nError: %s\n", details->sname, strerror(errno));
+		return errno;
 	}
 	else
 	{
-		details->connection_established = 1;
+		details->established = 1;
 		printf("[MH: System] Connection established to: %s\n", details->sname);
 		return EXIT_SUCCESS;
 	}
 }
 
+// ---------------------- Establish server ----------------------
+// Returns EXIT_SUCCESS on success, otherwise returns the error code
+int establish_server(server_create_details_t *details)
+{
+	details->attach = name_attach(NULL, details->name, 0);
+	if (details->attach == NULL)
+	{
+		printf("[MH: Error] Could not establish server with name: %s\nError: %s\n", details->name, strerror(errno));
+		return errno;
+	}
+	else
+	{
+		details->established = 1;
+		printf("[MH: System] Server established with name: %s\n", details->name);
+		return EXIT_SUCCESS;
+	}
+}
+
+// ---------------------- Cleanup server ----------------------
+// Returns EXIT_SUCCESS on success, otherwise returns the error code
+int cleanup_server(server_create_details_t *details)
+{
+	if (details->established)
+	{
+		if (name_detach(details->attach, 0) == -1)
+		{
+			printf("[MH: Error] Failed to detach server with name: %s\nError is %s\n", details->name, strerror(errno));
+			return errno;
+		}
+		else
+		{
+			details->established = 0;
+			printf("[MH: System] Detached server with name: %s\n", details->name);
+		}
+	}
+
+	return EXIT_SUCCESS;
+}
+
 int send_update_pulses(server_con_details_t *details, int event)
 {
-	if (details->connection_established)
+	if (details->established)
 	{
 		//int MsgSendPulse(int coid, int priority, int code, int value);
 		// Priority = -1 = use calling thread's priority.
 		// Should be adjusted if pulses have different urgency, the calling thread's priority causes issues for the reciever etc
-		int err = MsgSendPulse_r(details->server_coid, -1, details->client_identifier, event);
+		int err = MsgSendPulse_r(details->coid, -1, details->client_identifier, event);
 		if (err != EOK)
 		{
 			err = -err; // Flip
@@ -76,6 +115,7 @@ int send_update_pulses(server_con_details_t *details, int event)
 	}
 }
 
+// returns EOK on success, otherwise returns the error code. Also reply is filled with the server's response.
 int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 {
 	// Just in case
@@ -87,29 +127,94 @@ int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 		return EXIT_FAILURE;
 	}
 
-	if (MsgSend(details->server_coid, sizeof(*msg), reply, sizeof(*reply)) == -1)
+	if (MsgSend(details->coid, msg, sizeof(*msg), reply, sizeof(*reply)) == -1)
 	{
-
+		printf("[MH: Error] Failed to send message to \"%s\". Error is %s\n", details->sname, strerror(errno));
+		return errno;
+	}
+	else
+	{
+		printf("[MH: System] Successfully sent message to \"%s\"\n", details->sname);
+		return EOK;	
 	}
 }
 
 
-int cleanup(server_con_details_t *details)
+int cleanup_connection(server_con_details_t *details)
 {
-	if (details->connection_established)
+	if (details->established)
 	{
-		if (name_close(details->server_coid) == -1)
+		if (name_close(details->coid) == -1)
 		{
-			printf("[MH: Error] Failed to close coid (%d) to \"%s\"\nError is %s\n", details->server_coid, details->sname, strerror(errno));
+			printf("[MH: Error] Failed to close coid (%d) to \"%s\"\nError is %s\n", details->coid, details->sname, strerror(errno));
 			return EXIT_FAILURE;
 		}
 		else
 		{
-			details->connection_established = 0;
-			printf("[MH: System] Closed coid (%d) on ""%s""\n", details->server_coid, details->sname);
+			details->established = 0;
+			printf("[MH: System] Closed coid (%d) on ""%s""\n", details->coid, details->sname);
 		}
 	}
 
+	return EXIT_SUCCESS;
+}
+
+
+// ---------------------- Client dictionary ----------------------
+// Returns the entry for scoid, or NULL if not found
+client_details_t *client_dict_find(client_dict_t *dict, int scoid)
+{
+	for (uint8_t i = 0; i < dict->count; i++)
+	{
+		if (dict->entries[i].scoid == scoid)
+			return &dict->entries[i];
+	}
+	return NULL;
+}
+
+// Returns the first entry with client_id, or NULL if not found
+client_details_t *client_dict_find_by_id(client_dict_t *dict, uint8_t client_id)
+{
+	for (uint8_t i = 0; i < dict->count; i++)
+	{
+		if (dict->entries[i].client_id == client_id)
+			return &dict->entries[i];
+	}
+	return NULL;
+}
+
+// Returns the new entry (or the existing one if scoid is already present), or NULL if the dictionary is full
+client_details_t *client_dict_add(client_dict_t *dict, int scoid, uint8_t client_id)
+{
+	client_details_t *entry = client_dict_find(dict, scoid);
+	if (entry != NULL)
+	{
+		entry->client_id = client_id;
+		return entry;
+	}
+
+	if (dict->count >= CLIENT_DICT_SIZE)
+	{
+		printf("[MH: Error] Client dictionary is full. Client (scoid: %d, CID: %d) not added\n", scoid, client_id);
+		return NULL;
+	}
+
+	entry = &dict->entries[dict->count++];
+	entry->scoid = scoid;
+	entry->client_id = client_id;
+	entry->state = 0;
+	return entry;
+}
+
+// Removes the entry by moving the last entry into its slot, so pointers to the last entry become invalid.
+// Returns EXIT_SUCCESS on success, EXIT_FAILURE if scoid was not found
+int client_dict_remove(client_dict_t *dict, int scoid)
+{
+	client_details_t *entry = client_dict_find(dict, scoid);
+	if (entry == NULL)
+		return EXIT_FAILURE;
+
+	*entry = dict->entries[--dict->count];
 	return EXIT_SUCCESS;
 }
 
