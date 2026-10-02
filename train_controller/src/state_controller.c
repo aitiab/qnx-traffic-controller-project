@@ -24,7 +24,7 @@ state_t next_state 	= NRML;
 // NRML = 0, EM_NRML, APRCH, EM_B_CROSS, CROSS, EM_A_CROSS, SUCC_CROSS
 
 // train op normal ->
-int state_controller_events(events_t *ev)
+int state_transitioner(events_t *ev)
 {
 	uint8_t change_bool = 1;
 	switch(*ev)

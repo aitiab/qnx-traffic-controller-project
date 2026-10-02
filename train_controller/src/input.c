@@ -22,35 +22,59 @@ input_t input_obj = {
 };
 
 
+// Cleanup handler: releases the mutex if the thread is cancelled inside pthread_cond_wait
+static void unlock_input_mutex(void *arg)
+{
+	pthread_mutex_unlock(&(input_obj.mutex));
+}
+
 void readInput(events_t *ev)
 {
 	if (pthread_mutex_lock(&(input_obj.mutex)) == EOK)
 	{
+		// in the case that input thread has failed and exited, there wont be a signal to the cond_wait below
+		// when the input thread fails, main sets state machine to die on next cancellation point
+		// which is the cond_wait below.
+		// before it does die, it would call unlock_input_mutex to unlock the mutex
+		pthread_cleanup_push(unlock_input_mutex, NULL);
+
 		while (input_obj.status == STATUS_RUNNING && input_obj.count == 0)
 			pthread_cond_wait(&input_obj.cond, &input_obj.mutex);
 
+		// If input system status is running, then continue as normal
 		if (input_obj.status == STATUS_RUNNING)
 		{
 			*ev = input_obj.events[input_obj.nextRead];
 			input_obj.nextRead = (input_obj.nextRead + 1) % EVENT_BUFF_SIZE;
 			input_obj.count--;
 		}
-		else
+		else // If input system status is not running, return a critical failure event to state machine
 		{
 			*ev = CRITICAL_FAILURE;
 		}
-
-		pthread_mutex_unlock(&(input_obj.mutex));
+		
+		/* past the stravation point. if it has reached this point, then train_sense_system thread has not failed
+			and exited, so it is safe to pop the cleanup handler
+			popping the cleanup with a (1) will call the cleanup handler which will unlock the mutex
+			just mimicing the usual pthread_mutex_unlock() call.
+		*/
+		pthread_cleanup_pop(1); // unlocks the mutex
 	}
 	else
 	{
 		printf("[Warning] Failed to get mutex for readInput. Returning DEFAULT event\n");
-		*ev = CRITICAL_FAILURE; // or default?
+		/* CRITICAL_FAILURE or default? CRITICAL_FAILURE is more safe since loss of input means train doesnt
+		 know what to do.
+		 
+		 Maybe need to check type of error. some might be recoverable. although the input would be lost, which 
+		 is problem since it was critical sense data. so maybe CRITICAL_FAILURE is better.
+		*/
+		*ev = CRITICAL_FAILURE;  
 	}
 }
 
 // Input system
-void *terminal_in(void *arg)
+void *train_sense_system(void *arg)
 {
 	int success_flag = 0;
 
@@ -137,18 +161,32 @@ void *terminal_in(void *arg)
 				continue;
 			}
 
-			// Get readInput out of the cond_wait
-			// stop readInput checking the status before its updated
-			pthread_mutex_lock(&input_obj.mutex);
-			input_obj.status = STATUS_FAILED;
-			pthread_cond_broadcast(&input_obj.cond); // send to all waiting on the cond
-			pthread_mutex_unlock(&input_obj.mutex);
+			/* Get readInput out of the cond_wait
+			 why mutexes around... not sure...
+			
+			 anyhow if the mutex lock fails, the thread exists anyhow
+			 which then lets the main thread handling closing the state machine
+			 and putting the train in SYS_FAIL state.
+
+			 if mutex lock succeeds, the input system status is set to failed and cond unlocks the 
+			 readInput func (state machine thread) and sends CRITICAL_FAILURE event to state machine
+			 which also transitions to SYS_FAIL state.
+
+			 so they are redundant but safe.
+			 */
+			if (pthread_mutex_lock(&input_obj.mutex) == EOK)
+			{
+				input_obj.status = STATUS_FAILED;
+				pthread_cond_broadcast(&input_obj.cond); // send to all waiting on the cond
+				pthread_mutex_unlock(&input_obj.mutex);
+			}
 
 			printf("[Error]: fgets() returned NULL. Error is: %s\n", strerror(errno));
-			printf("Fatal error stopping reading stdin in terminal_in.\n");
+			printf("Fatal error stopping reading stdin in train_sense_system.\n");
 			return (void *)EXIT_FAILURE;
 		}
 	}
 
+	// should it relly return NULL? the while loop is infinite so it reacches here we have big problems
 	return NULL;
 }

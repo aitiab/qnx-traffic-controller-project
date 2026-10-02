@@ -21,7 +21,7 @@ typedef struct {
 
 extern input_t input_obj;
 
-void *terminal_in(void *arg);
+void *train_sense_system(void *arg);
 void readInput(events_t *ev);
 
 #endif /* SRC_INPUT_H_ */

@@ -13,6 +13,6 @@ extern state_t next_state;
 typedef enum {DEFAULT = 0, APRCHNG, EMERG, CROSSNG, PAST, FIXED, CRITICAL_FAILURE} events_t;
 // --------------------------- END Events Definition ------------------------------- //
 
-int state_controller_events(events_t *ev);
+int state_transitioner(events_t *ev);
 
 #endif /* SRC_STATE_CONTROLLER_H_ */
