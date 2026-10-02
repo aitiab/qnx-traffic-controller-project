@@ -23,77 +23,189 @@ server_con_details_t central_con_details = {
 	.status = STATUS_RUNNING
 };
 
-server_create_details_t central_server_details = {
-	.name = TRAIN_CONTROLLER_ATTACH_POINT,
+// just preping here. move to crossing controller's message controller later
+server_create_details_t crossing_server_details = {
+	.name = CROSSING_SERVER_ATTACH_POINT,
 	.established = 0,
 	.attach = NULL,
 	.status = STATUS_RUNNING
 };
 
-void *server_train_controller(void *arg)
+void *server_crossing_controller(void *arg)
 {
 	
 	// Need to worry about if establish_server fails, it should send the train in SYS_FAULT state.
-	int rc = establish_server(&central_server_details);
+	int rc = establish_server(&crossing_server_details);
 	if (rc == EXIT_FAILURE)
 	{
-		central_server_details.status = STATUS_FAILED;
-		printf("[Error] Failed to establish server for the train controller.\nserver_train_controller thread is exiting\n");
+		crossing_server_details.status = STATUS_FAILED;
+		printf("[Error] Failed to establish server for the crossing controller.\server_crossing_controller thread is exiting\n");
 		return (void *)EXIT_FAILURE;
 	}
+
+	// will this {0} set both count and the inner struct?
+	client_dict_t client_dict = {0};
 
 	recv_t recv;
 	while (1)
 	{
-		// Do i need to use the msg_info?
-		int rcvid = MsgReceive(central_server_details.attach->chid, &recv, sizeof(recv), NULL);
+		struct _msg_info info;
+		int rcvid = MsgReceive(crossing_server_details.attach->chid, &recv, sizeof(recv), &info);
 		if (rcvid == -1)
 		{
-			printf("[TrainServer: Warning] Failed to receive message. Error is %s\n", strerror(errno));
+			printf("[CrossServer: Warning] Failed to receive message. Error is %s\n", strerror(errno));
 			continue;
 		}
 
 		if (rcvid == 0)
 		{
 			// Pulse received
-			printf("[TrainServer: System] Pulse received. Code is %d, Value is %d\n", recv.pulse.code, recv.pulse.value);
-		
+			printf("[CrossServer: System] Pulse received. Code is %d, Value is %d\n", recv.pulse.code, recv.pulse.value);
+			
+			client_details_t *ct = client_dict_lookup_scoid(&client_dict, recv.pulse.scoid);
+			
+			// // is this valid? shouldnt it depend on the kernal limit? 
+			// if (ct == NULL)
+			// {
+			// 	printf("[CrossServer: Error] Clients dict is full. Will drop this pulse. Might be fatal\n");
+			// }
+			
+			client_handler_data_t *ct_d = {.ct = ct, .data = NULL};
+
 			switch (recv.pulse.code)
 			{
 				// Find someway to connect clientID with scoid.
 				// Use value to let client decide cancel/or not?
-				
 				case _PULSE_CODE_DISCONNECT:
-					printf("[TrainServer: System] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
+					printf("[CrossServer: System] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
 					// Free any state kept with client
-					client_disconnect_handler(recv.pulse.scoid);
-					ConnectDetach(recv.pulse.scoid);
+
+					// If scoid was not found in our established client list (from _IO_CONNECT)
+					// just let it detach. might be due to failed connection or something
+					if (ct != NULL)
+					{
+						if (ct->disconnect_handler != NULL)
+						{
+							ct->disconnect_handler((void *)ct_d);
+						}
+						// else
+						// {
+						// 	// maybe a default one?
+						// }
+
+						// remove from dict and detach 
+						if (client_dict_remove(&client_dict, recv.pulse.scoid, 1) == EXIT_FAILURE)
+						{
+							printf("[CrossServer: Warning] Attempted to remove and detach client %d, but it was not found in client dict\n", ct->client_id);
+						}
+					}
+					else
+					{
+						ConnectDetatch(recv.pulse.scoid);
+					}
+					
 					break;
 				case _PULSE_CODE_UNBLOCK:
-					printf("[TrainServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
+					printf("[CrossServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
+					
+					int unblocked_rcvid = recv.pulse.value.sival_int;
+					// just random idek
+					ct_d->data = &unblocked_rcvid;
+					if (ct->unblock_handler != NULL)
+					{
+						ct->unblock_handler((void *)ct_d);
+					}
+					// else
+					// {
+					// 	// Default one?
+					// }
+
+					// recv.pulse.value.sival_int holds the recv
+					MsgError(unblocked_rcvid, EINTR);
 					break;
-				
+				// My codes. should use it to get the clientID and set the disconnect and unblock handler.
 				default:
-					printf("[TrainServer: Warning] Received unknown pulse code %d from central controller. Value is %d\n", recv.pulse.code, recv.pulse.value);
+					printf("[CrossServer: Warning] Received unknown pulse code %d from central controller. Value is %d\n", recv.pulse.code, recv.pulse.value);
 					break;
 			}
+
+			continue; // go back to the top of the while loop
 		}
 
 
 		if (rcvid > 0)
 		{
 			// Message received
-			printf("[TrainServer: System] Received message from central controller. Type is %d, Data is %d\n", recv.msg.type, recv.msg.data);
+			printf("[CrossServer: System] Received message from central controller. Type is %d, Data is %d\n", recv.msg.type, recv.msg.data);
+			
+			if (recv.msg.type == _IO_CONNECT)
+			{
+				MsgReply(rcvid, EOK, NULL, 0);
+				printf("\n[CrossServer: System] Server recieved _IO_CONNECT message and replyed with EOK\n");
+				continue;
+			}
+
+			if (recv.msg.type > _IO_BASE && recv.msg.type <= _IO_MAX)
+			{
+				MsgError(rcvid, ENOSYS);
+				printf("\n[CrossServer: System] Server recieved IO message and rejected it (ENOSYS)\n");
+				continue
+			}
+			
+			// need to add my own admitter. (separate form the IO_CONNECT>)
+			
+			// should there be more checks here?
+			// client add or get will reset the client_details_t if update_if_exists = 1. includes cancelling all reqs
+			client_details_t *ct = client_dict_add_or_get(&client_dict, info.scoid, recv.msg.client_identifier, 1);
+			if (ct->state == CLIENT_BASE_DETAILS_SET)
+			{
+				client_handler_initaliser(ct);
+			}
+
+			if (ct->client_id == CROSSING_CONTROLLER_ID)
+			{
+
+			}
+			reqs_add(&ct, REQ_ADD_REPLACE)
+			ct->reqs
+			
+
 			reply_t reply = {
 				.data = 0 // Just a dummy reply for now.
 			};
 			if (MsgReply(rcvid, EOK, &reply, sizeof(reply)) == -1)
 			{
-				printf("[TrainServer: Error] Failed to reply to the message from central controller. Error is %s\n", strerror(errno));
+				printf("[CrossServer: Error] Failed to reply to the message from central controller. Error is %s\n", strerror(errno));
 			}
 		}
 	}
 }
+
+static void _disconnect_handler(void *data)
+{
+	//
+}
+
+static void _unblock_handler(void *data)
+{
+
+}
+
+void client_handler_initaliser(client_details_t *ct)
+{
+	switch (ct->client_id)
+	{
+	case CROSSING_CONTROLLER_CLIENT_ID:
+		ct->disconnect_handler = _disconnect_handler;
+		ct->unblock_handler = _unblock_handler;
+		ct->state = CLIENT_ALL_DETAILS_SET;
+		break;
+	default:
+		printf("[CrossServer: Error] ClientID not recognised, could not set the disconnect and unblock handlers\n");
+		break;
+	}
+}
+
 
 // Need to handle lost updates.
 void *subserver_central_messenger(void *arg)

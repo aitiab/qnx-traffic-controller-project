@@ -161,8 +161,8 @@ int cleanup_connection(server_con_details_t *details)
 
 
 // ---------------------- Client dictionary ----------------------
-// Returns the entry for scoid, or NULL if not found
-client_details_t *client_dict_find(client_dict_t *dict, int scoid)
+// lookup client_details_t for given scoid, or NULL if not found
+client_details_t *client_dict_lookup_scoid(client_dict_t *dict, int scoid)
 {
 	for (uint8_t i = 0; i < dict->count; i++)
 	{
@@ -172,8 +172,8 @@ client_details_t *client_dict_find(client_dict_t *dict, int scoid)
 	return NULL;
 }
 
-// Returns the first entry with client_id, or NULL if not found
-client_details_t *client_dict_find_by_id(client_dict_t *dict, uint8_t client_id)
+// lookup using client_id, or NULL if not found
+client_details_t *client_dict_lookup_id(client_dict_t *dict, int client_id)
 {
 	for (uint8_t i = 0; i < dict->count; i++)
 	{
@@ -183,13 +183,32 @@ client_details_t *client_dict_find_by_id(client_dict_t *dict, uint8_t client_id)
 	return NULL;
 }
 
-// Returns the new entry (or the existing one if scoid is already present), or NULL if the dictionary is full
-client_details_t *client_dict_add(client_dict_t *dict, int scoid, uint8_t client_id)
+// resets every field
+static void client_details_init(client_details_t *entry, int scoid, int client_id)
 {
-	client_details_t *entry = client_dict_find(dict, scoid);
+	entry->scoid = scoid; // connection id of source from server pov
+	entry->client_id = client_id;
+	entry->disconnect_handler = NULL;
+	entry->unblock_handler = NULL;
+	entry->state = CLIENT_BASE_DETAILS_SET;
+	entry->reqs.count = 0;
+}
+
+// Lookup by scoid, adding a new entry if not found
+// update_if_exists: CLIENT_UPDATE_IF_EXISTS resets an existing entry for the new client (scoid reuse)
+// 					 CLIENT_KEEP_IF_EXISTS returns it untouched
+// returns the new or existing entry, or NULL if the dictionary is full
+client_details_t *client_dict_get_or_add(client_dict_t *dict, int scoid, int client_id, uint8_t update_if_exists)
+{
+	// scoid is unique and found in either pulse or message (msg_info) (sys and my own)
+	client_details_t *entry = client_dict_lookup_scoid(dict, scoid);
 	if (entry != NULL)
 	{
-		entry->client_id = client_id;
+		// if client_id changed, then erase all prior reqs
+		if (update_if_exists == CLIENT_UPDATE_IF_EXISTS)
+			printf("[MH: System] Client already exists in dict, removing all reqs for client %d\n", entry->client_id);
+			close_all_reqs(entry);
+			client_details_init(entry, scoid, client_id);
 		return entry;
 	}
 
@@ -200,24 +219,109 @@ client_details_t *client_dict_add(client_dict_t *dict, int scoid, uint8_t client
 	}
 
 	entry = &dict->entries[dict->count++];
-	entry->scoid = scoid;
-	entry->client_id = client_id;
-	entry->state = 0;
+	client_details_init(entry, scoid, client_id);
 	return entry;
 }
 
-// Removes the entry by moving the last entry into its slot, so pointers to the last entry become invalid.
+// Fails all pending reqs, optionally detaches the scoid (detach= CLIENT_DETACH / CLIENT_NO_DETACH),
+// then removes the entry by moving last entry into its slot, so pointers to the last entry become invalid
 // Returns EXIT_SUCCESS on success, EXIT_FAILURE if scoid was not found
-int client_dict_remove(client_dict_t *dict, int scoid)
+int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 {
-	client_details_t *entry = client_dict_find(dict, scoid);
+	// get the entry
+	client_details_t *entry = client_dict_lookup_scoid(dict, scoid);
 	if (entry == NULL)
 		return EXIT_FAILURE;
 
+
+	// close all reqs in the last entry. place it here? or in disconnect_handler?
+	// need to deal with errors
+	printf("[MH: System] Removing all reqs for client %d\n", entry->client_id);
+	close_all_reqs(entry);
+	if (detach == CLIENT_DETACH)
+	{
+		printf("[MH: System] Detaching client %d\n", entry->client_id);
+		if (ConnectDetach(entry->scoid) == -1)
+		{
+			printf("[MH: Warning] ConnectDetach failed to detach scoid %d. Error is %s\n", entry->scoid, strerror(errno));
+		}
+	}
+	else
+	{
+		printf("[MH: System] Reqs removed, but client %d not detached\n", entry->client_id);
+	}
+	
+	// replace the entry with the last one in the dict. so now last entry can be replaced.
 	*entry = dict->entries[--dict->count];
 	return EXIT_SUCCESS;
 }
 
+// ---------------------- Client requests ----------------------
+// Unblocks the client waiting on rcvid with EAGAIN. Errors are only logged.
+static void fail_req(client_details_t *ct, int rcvid)
+{
+	if (MsgError(rcvid, EAGAIN) == -1)
+	{
+		if (errno == ESRCH)
+		{
+			// client has already gone, nothing is blocked on it
+			printf("[MH: Warning] Failed to close req (rcvid %d) for client %d by MsgError as rcvid doesn't exist\n", rcvid, ct->client_id);
+		}
+		else
+		{
+			printf("[MH: Error] Failed to close req (rcvid %d) for client %d by MsgError. Error is %s\nCould lead to starvation for the client\n", rcvid, ct->client_id, strerror(errno));
+		}
+	}
+}
+
+// adds r to the client's pending requests
+// If full and replace_existing == REQ_ADD_REPLACE, the first replaceable request is failed with EAGAIN and overwritten
+// Returns EXIT_SUCCESS on success, REQ_BUFF_FULL if there was no room
+int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r)
+{
+	req_array_t *reqs = &ct->reqs;
+
+	if (reqs->count < REQ_BUFFER_SIZE)
+	{
+		// does this copy properly?
+		reqs->entries[reqs->count++] = r;
+		return EXIT_SUCCESS;
+	}
+
+	if (replace_existing == REQ_ADD_REPLACE)
+	{
+		for (uint8_t i = 0; i < reqs->count; i++)
+		{
+			if (reqs->entries[i].replaceable == REQ_REPLACEABLE)
+			{
+				fail_req(ct, reqs->entries[i].rcvid);
+				reqs->entries[i] = r;
+
+				// maybe it should say it replaced something? idk
+				return EXIT_SUCCESS;
+			}
+		}
+	}
+
+	return REQ_BUFF_FULL;
+}
+
+// closes all reqs for the client and empties its req array
+int close_all_reqs(client_details_t *ct)
+{
+	req_array_t *reqs = &ct->reqs;
+
+	for (uint8_t i = 0; i < reqs->count; i++)
+	{
+		fail_req(ct, reqs->entries[i].rcvid);
+
+		// if i have work for that rcvid. i should clean that up too
+	}
+	reqs->count = 0;
+	return EXIT_SUCCESS;
+}
+
+// ----------------------- Add and Read from log buffer ----------------------- // 
 
 // If failure occurs, then the data is dropped. so this should not be used for critical message passing
 int add_to_log_buffer(log_buffer_t *buff, uint32_t data)
@@ -245,7 +349,7 @@ int add_to_log_buffer(log_buffer_t *buff, uint32_t data)
 	}
 	else
 	{
-		printf("[Error] Up to date add to log buffer failed due to mutex lock: %s\nThe status update will be lost\n", strerror(rc));
+		printf("[MH: Error] Up to date add to log buffer failed due to mutex lock: %s\nThe status update will be lost\n", strerror(rc));
 		return EXIT_FAILURE;
 	}
 }
