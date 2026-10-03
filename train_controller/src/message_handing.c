@@ -195,32 +195,49 @@ static void client_details_init(client_details_t *entry, int scoid, int client_i
 }
 
 // Lookup by scoid, adding a new entry if not found
-// update_if_exists: CLIENT_UPDATE_IF_EXISTS resets an existing entry for the new client (scoid reuse)
+// update_if_exists: CLIENT_UPDATE_IF_EXISTS (and client_id does not match) resets an existing entry for the new client (scoid reuse)
 // 					 CLIENT_KEEP_IF_EXISTS returns it untouched
-// returns the new or existing entry, or NULL if the dictionary is full
-client_details_t *client_dict_get_or_add(client_dict_t *dict, int scoid, int client_id, uint8_t update_if_exists)
+// returns (ct = entry and rt = some return code for the new or existing entry), or (ct = NULL, rt = CLIENT_DICT_FULL) if the dictionary is full
+client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int scoid, int client_id, uint8_t update_if_exists)
 {
 	// scoid is unique and found in either pulse or message (msg_info) (sys and my own)
 	client_details_t *entry = client_dict_lookup_scoid(dict, scoid);
+	client_dict_add_get_return_t r = {.ct = entry, .rt = -1};
 	if (entry != NULL)
 	{
 		// if client_id changed, then erase all prior reqs
-		if (update_if_exists == CLIENT_UPDATE_IF_EXISTS)
-			printf("[MH: System] Client already exists in dict, removing all reqs for client %d\n", entry->client_id);
+		// feels like im taking this func out of scope too much. its become a everything func... so for nothing
+		if (update_if_exists == CLIENT_UPDATE_IF_EXISTS && entry->client_id != client_id)
+		{
+			printf("[MH: System] Client (CID: %d) already exists in dict, updating client details... removing all reqs...\n", entry->client_id);
 			close_all_reqs(entry);
 			client_details_init(entry, scoid, client_id);
-		return entry;
+			r.rt = CLIENT_KEPT_UPDATED;
+		}
+		else
+		{
+			printf("[MH: System] Client (CID: %d) already exists in dict. Returning existing client details...\n", entry->client_id);
+			r.rt = CLIENT_KEPT_RETURNED;
+		}
+
+		return r;
 	}
 
 	if (dict->count >= CLIENT_DICT_SIZE)
 	{
 		printf("[MH: Error] Client dictionary is full. Client (scoid: %d, CID: %d) not added\n", scoid, client_id);
-		return NULL;
+		r.rt = CLIENT_DICT_FULL;
+		r.ct = NULL;
+		return r;
 	}
 
+	printf("[MH: System] Client (scoid: %d, CID: %d) added to client dict.\n", scoid, client_id);
 	entry = &dict->entries[dict->count++];
 	client_details_init(entry, scoid, client_id);
-	return entry;
+
+	r.ct = entry;
+	r.rt = CLIENT_NEW_ENTRY;
+	return r;
 }
 
 // Fails all pending reqs, optionally detaches the scoid (detach= CLIENT_DETACH / CLIENT_NO_DETACH),
@@ -231,26 +248,29 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 	// get the entry
 	client_details_t *entry = client_dict_lookup_scoid(dict, scoid);
 	if (entry == NULL)
+	{
+		printf("[MH: System] Failed to remove client (scoid: %d) as it does not exist in the client dict provided.\n", scoid);
 		return EXIT_FAILURE;
-
+	}
 
 	// close all reqs in the last entry. place it here? or in disconnect_handler?
 	// need to deal with errors
-	printf("[MH: System] Removing all reqs for client %d\n", entry->client_id);
+	printf("[MH: System] Removing all reqs for client (scoid: %d)...\n", entry->scoid);
 	close_all_reqs(entry);
 	if (detach == CLIENT_DETACH)
 	{
-		printf("[MH: System] Detaching client %d\n", entry->client_id);
+		printf("[MH: System] Detaching client (scoid: %d)...\n", entry->scoid);
 		if (ConnectDetach(entry->scoid) == -1)
 		{
-			printf("[MH: Warning] ConnectDetach failed to detach scoid %d. Error is %s\n", entry->scoid, strerror(errno));
+			printf("[MH: Warning] Failed to detach client (scoid: %d)... Error is %s\n", entry->scoid, strerror(errno));
 		}
 	}
 	else
 	{
-		printf("[MH: System] Reqs removed, but client %d not detached\n", entry->client_id);
+		printf("[MH: System] Reqs removed, but client (scoid: %d) not detached\n", entry->scoid);
 	}
 	
+	printf("[MH: System] Removing client (scoid: %d) from the provided client dict.\n", entry->scoid);
 	// replace the entry with the last one in the dict. so now last entry can be replaced.
 	*entry = dict->entries[--dict->count];
 	return EXIT_SUCCESS;
@@ -265,11 +285,11 @@ static void fail_req(client_details_t *ct, int rcvid)
 		if (errno == ESRCH)
 		{
 			// client has already gone, nothing is blocked on it
-			printf("[MH: Warning] Failed to close req (rcvid %d) for client %d by MsgError as rcvid doesn't exist\n", rcvid, ct->client_id);
+			printf("[MH: Warning] Failed to close req (rcvid %d) for client (scoid: %d, CID: %d) by MsgError as rcvid doesn't exist\n", rcvid, ct->scoid, ct->client_id);
 		}
 		else
 		{
-			printf("[MH: Error] Failed to close req (rcvid %d) for client %d by MsgError. Error is %s\nCould lead to starvation for the client\n", rcvid, ct->client_id, strerror(errno));
+			printf("[MH: Error] Failed to close req (rcvid %d) for client (scoid: %d, CID: %d) by MsgError. Error is %s\nCould lead to starvation for the client\n", rcvid, ct->scoid, ct->client_id, strerror(errno));
 		}
 	}
 }
@@ -304,6 +324,23 @@ int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r)
 	}
 
 	return REQ_BUFF_FULL;
+}
+
+// Removes the req r if its found in ct->reqs. If found returns EXIT_SUCCESS. If not found returns EXIT_FAILURE
+int reqs_remove(client_details_t *ct, req_t r)
+{
+	req_array_t *reqs = &ct->reqs;
+	for (int i = 0; i < reqs->count; i++)
+	{
+		if (reqs->entries[i].rcvid == r.rcvid)
+		{
+			// like in client_dict, fill this space with the last entry and decrement.
+			// shallow copy is fine here?
+			reqs->entries[i] = reqs->entries[--reqs->count];
+			return EXIT_SUCCESS;
+		}
+	}
+	return EXIT_FAILURE;
 }
 
 // closes all reqs for the client and empties its req array

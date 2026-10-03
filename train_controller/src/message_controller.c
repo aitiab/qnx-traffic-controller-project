@@ -35,11 +35,12 @@ void *server_crossing_controller(void *arg)
 {
 	
 	// Need to worry about if establish_server fails, it should send the train in SYS_FAULT state.
+	// establish_server returns EXIT_SUCCESS is succeed, otherwise passes down the errno
 	int rc = establish_server(&crossing_server_details);
-	if (rc == EXIT_FAILURE)
+	if (rc != EXIT_SUCCESS)
 	{
 		crossing_server_details.status = STATUS_FAILED;
-		printf("[Error] Failed to establish server for the crossing controller.\server_crossing_controller thread is exiting\n");
+		printf("[Error] Failed to establish server for the crossing controller...\n\"server_crossing_controller\" thread is exiting.\n");
 		return (void *)EXIT_FAILURE;
 	}
 
@@ -60,7 +61,7 @@ void *server_crossing_controller(void *arg)
 		if (rcvid == 0)
 		{
 			// Pulse received
-			printf("[CrossServer: System] Pulse received. Code is %d, Value is %d\n", recv.pulse.code, recv.pulse.value);
+			printf("[CrossServer: System] Pulse received (scoid: %d, code: %d, value: %d)\n", recv.pulse.scoid, recv.pulse.code, recv.pulse.value.sival_int);
 			
 			client_details_t *ct = client_dict_lookup_scoid(&client_dict, recv.pulse.scoid);
 			
@@ -70,7 +71,7 @@ void *server_crossing_controller(void *arg)
 			// 	printf("[CrossServer: Error] Clients dict is full. Will drop this pulse. Might be fatal\n");
 			// }
 			
-			client_handler_data_t *ct_d = {.ct = ct, .data = NULL};
+			client_handler_data_t ct_d = {.ct = ct, .data = NULL};
 
 			switch (recv.pulse.code)
 			{
@@ -80,13 +81,13 @@ void *server_crossing_controller(void *arg)
 					printf("[CrossServer: System] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
 					// Free any state kept with client
 
-					// If scoid was not found in our established client list (from _IO_CONNECT)
+					// If scoid was not found in our established client list (from ADMIT)
 					// just let it detach. might be due to failed connection or something
 					if (ct != NULL)
 					{
 						if (ct->disconnect_handler != NULL)
 						{
-							ct->disconnect_handler((void *)ct_d);
+							ct->disconnect_handler((void *)&ct_d);
 						}
 						// else
 						// {
@@ -94,38 +95,36 @@ void *server_crossing_controller(void *arg)
 						// }
 
 						// remove from dict and detach 
-						if (client_dict_remove(&client_dict, recv.pulse.scoid, 1) == EXIT_FAILURE)
-						{
-							printf("[CrossServer: Warning] Attempted to remove and detach client %d, but it was not found in client dict\n", ct->client_id);
-						}
+						client_dict_remove(&client_dict, recv.pulse.scoid, CLIENT_DETACH);
 					}
 					else
 					{
-						ConnectDetatch(recv.pulse.scoid);
+						ConnectDetach(recv.pulse.scoid);
 					}
-					
 					break;
 				case _PULSE_CODE_UNBLOCK:
 					printf("[CrossServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
 					
 					int unblocked_rcvid = recv.pulse.value.sival_int;
 					// just random idek
-					ct_d->data = &unblocked_rcvid;
-					if (ct->unblock_handler != NULL)
+					if (ct != NULL)
 					{
-						ct->unblock_handler((void *)ct_d);
+						ct_d.data = &unblocked_rcvid;
+						if (ct->unblock_handler != NULL)
+						{
+							ct->unblock_handler((void *)&ct_d);
+						}
+						// else
+						// {
+						// 	// Default one?
+						// }
 					}
-					// else
-					// {
-					// 	// Default one?
-					// }
-
 					// recv.pulse.value.sival_int holds the recv
 					MsgError(unblocked_rcvid, EINTR);
 					break;
 				// My codes. should use it to get the clientID and set the disconnect and unblock handler.
 				default:
-					printf("[CrossServer: Warning] Received unknown pulse code %d from central controller. Value is %d\n", recv.pulse.code, recv.pulse.value);
+					printf("[CrossServer: Warning] Received unknown pulse code %d. Value is %d\n", recv.pulse.code, recv.pulse.value.sival_int);
 					break;
 			}
 
@@ -149,25 +148,52 @@ void *server_crossing_controller(void *arg)
 			{
 				MsgError(rcvid, ENOSYS);
 				printf("\n[CrossServer: System] Server recieved IO message and rejected it (ENOSYS)\n");
-				continue
+				continue;
 			}
 			
+
 			// need to add my own admitter. (separate form the IO_CONNECT>)
+			if (recv.msg.type == ADMITTER_CODE)
+			{
+				// client add or get will reset the client_details_t if update_if_exists = 1. includes cancelling all reqs
+				client_dict_add_get_return_t r = client_dict_get_or_add(&client_dict, info.scoid, recv.msg.client_identifier, CLIENT_UPDATE_IF_EXISTS);
+				if (r.ct == NULL)
+				{
+					MsgError(rcvid, EBUSY); // client_dict is full. reject connection
+					printf("\n[CrossServer: System] Server recieved ADMITTER message but client dict was full... replyed with EBUSY\n");
+					continue; // ?
+				}
+				MsgReply(rcvid, EOK, NULL, 0);
+				printf("\n[CrossServer: System] Server recieved ADMITTER message and replyed with EOK\n");
+				continue;
+			}
 			
-			// should there be more checks here?
-			// client add or get will reset the client_details_t if update_if_exists = 1. includes cancelling all reqs
-			client_details_t *ct = client_dict_add_or_get(&client_dict, info.scoid, recv.msg.client_identifier, 1);
+			// have update set to off does mean even if client_id has changed (scoid reused) we believe its the same client
+			// but if they disconnected it should be removed in the disconnect pulse handling. so i wonder if this is ok
+			client_details_t *ct = client_dict_lookup_scoid(&client_dict, info.scoid);
+
+			if (ct == NULL)
+			{
+				// Maybe should send something in the reply? Some data and not just a error?
+				printf("[MH: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
+				MsgError(rcvid, EINVAL);
+				// If not found in the list, then ignore this rcvid
+				continue;
+			}
+
+			// if at this point then client exists and valid
+
 			if (ct->state == CLIENT_BASE_DETAILS_SET)
 			{
 				client_handler_initaliser(ct);
 			}
 
-			if (ct->client_id == CROSSING_CONTROLLER_ID)
+			if (ct->client_id == CROSSING_CONTROLLER_CLIENT_ID)
 			{
 
 			}
-			reqs_add(&ct, REQ_ADD_REPLACE)
-			ct->reqs
+			//reqs_add(&ct, REQ_ADD_REPLACE)
+			//ct->reqs
 			
 
 			reply_t reply = {
@@ -188,10 +214,12 @@ static void _disconnect_handler(void *data)
 
 static void _unblock_handler(void *data)
 {
-
+	client_handler_data_t *d = (client_handler_data_t *)data;  
+	// maybe should have more rules or maybe a struct for data
+	reqs_remove(d->ct, *(int *)d->data);
 }
 
-void client_handler_initaliser(client_details_t *ct)
+static void client_handler_initaliser(client_details_t *ct)
 {
 	switch (ct->client_id)
 	{

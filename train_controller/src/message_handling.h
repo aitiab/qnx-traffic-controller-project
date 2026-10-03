@@ -85,7 +85,7 @@ typedef struct {
 // struct for passing data into the disconnect and unblock handlers
 typedef struct
 {
-	clients_details_t *ct; 
+	client_detail_t *ct; 
 	void *data;
 } client_handler_data_t;
 
@@ -125,9 +125,21 @@ int cleanup_server(server_create_details_t *details);
 
 client_details_t *client_dict_lookup_scoid(client_dict_t *dict, int scoid);
 client_details_t *client_dict_lookup_id(client_dict_t *dict, int client_id);
+
+#define CLIENT_KEPT_RETURNED 	1
+#define CLIENT_KEPT_UPDATED  	2
+#define CLIENT_NEW_ENTRY 		0
+typedef struct
+{
+	client_details_t *ct;
+	int8_t 		 rt; // Return type. 0 = New Entry, 1 = existing returned, 2 = existing updated returned
+} client_dict_add_get_return_t;
+
 #define CLIENT_UPDATE_IF_EXISTS 1
 #define CLIENT_KEEP_IF_EXISTS 	0
-client_details_t *client_dict_get_or_add(client_dict_t *dict, int scoid, int client_id, uint8_t update_if_exists);
+#define CLIENT_DICT_FULL 		-2
+client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int scoid, int client_id, uint8_t update_if_exists);
+
 #define CLIENT_DETACH 			1
 #define CLIENT_NO_DETACH 		0
 int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach);
@@ -137,7 +149,7 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach);
 #define REQ_BUFF_FULL 			-1
 int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r);
 int close_all_reqs(client_details_t *ct);
-
+int close_all_reqs(client_details_t *ct);
 
 int add_to_log_buffer(log_buffer_t *buff, uint32_t data);
 int read_from_log_buffer(log_buffer_t *buff, uint32_t *data);
