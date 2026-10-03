@@ -23,6 +23,15 @@ server_con_details_t central_con_details = {
 	.status = STATUS_RUNNING
 };
 
+// Connection details to crossing controller
+server_con_details_t crossing_con_details = {
+	.established = 0,
+	.coid = -1,
+	.client_identifier = TRAIN_CONTROLLER_CLIENT_ID, // need to discuss with the central controller
+	.sname = QNET_CROSSING_SERVER_ATTACH_POINT, // What's the consequence of this?
+	.status = STATUS_RUNNING // should it be running on start? 
+};
+
 // Need to handle lost updates.
 void *subserver_central_messenger(void *arg)
 {
@@ -32,7 +41,7 @@ void *subserver_central_messenger(void *arg)
 	// What should happen if it fails to connect to central controller?
 	// Timed reconnection?. Just die?
 	int rc = establish_connection(&central_con_details);
-	if (rc == EXIT_FAILURE || rc == MH_EXIT_CLIENTID_ISSUE)
+	if (rc != EXIT_SUCCESS)
 	{
 		central_con_details.status = STATUS_FAILED;
 		printf("[Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");

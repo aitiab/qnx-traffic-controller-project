@@ -24,11 +24,42 @@ static void wait_for_event(events_t *ev)
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 }
 
+// need to change the name now that its not only just a sm controller...
+// maybe subserver? soft_controller? child_controller?
 // Child state machine. Runs until it reaches SYS_FAIL or is cancelled by main.
-void *child_sm_controller(void *arg)
+void *child_train_controller(void *arg)
 {
+
 	// start on cancel disabled to keep state machine stable.
+	// even the connections below change state so place it above em.
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
+	// this whole thread is very poorly written ngl
+
+	if (establish_connection(&crossing_con_details) != EXIT_SUCCESS)
+	{
+		printf("[Error] Failed to connect to the crossing server. Moving state to SYS_FAIL.\n");
+		events_t ev = CRITICAL_FAILURE;
+		int message = state_transitioner(&ev);
+		cur_state = next_state;
+		if (message != -1)
+			add_to_log_buffer(&pulses_to_central, (uint32_t)message);
+		return (void *)EXIT_FAILURE;
+	}
+
+	reply_t admit_reply = {0};
+	if(send_admit_message(&crossing_con_details, ADMITTER_CODE, &admit_reply) != EXIT_SUCCESS)
+	{
+		printf("[Error] Failed to gain admission to the crossing server. Moving state to SYS_FAIL.\n");
+		events_t ev = CRITICAL_FAILURE;
+		int message = state_transitioner(&ev);
+		cur_state = next_state;
+		if (message != -1)
+			add_to_log_buffer(&pulses_to_central, (uint32_t)message);
+		return (void *)EXIT_FAILURE;
+	}
+
+	
 
 	events_t ev = DEFAULT;
 	int message = -1; // the pulse value to be send to central controller
@@ -83,7 +114,7 @@ void *child_sm_controller(void *arg)
 int main(void) {
 	errno = EOK;
 
-	pthread_t train_sense_system_tid, central_massenger_tid, child_sm_controller_tid;
+	pthread_t train_sense_system_tid, central_massenger_tid, child_train_controller_tid;
 	int rc;
 
 	// Maybe set to lowest priority.
@@ -96,13 +127,13 @@ int main(void) {
 
 	// should be higher priority than central messenger given it maintains the state.
 	// if "child" state machine failed to be created, then place the train in SYS_FAIL state.
-	void *child_sm_controller_status = (void *)NULL;
-	rc = pthread_create(&child_sm_controller_tid, NULL, child_sm_controller, NULL);
+	void *child_train_controller_status = (void *)NULL;
+	rc = pthread_create(&child_train_controller_tid, NULL, child_train_controller, NULL);
 	if (rc != EOK)
 	{
 		printf("[Error] Failed to create thread for state machine: %s\nExiting with FAIL\n", strerror(rc));
 		cur_state = SYS_FAIL;
-		child_sm_controller_status = (void *)EXIT_FAILURE;
+		child_train_controller_status = (void *)EXIT_FAILURE;
 
 
 		// Should the main thread exit_failure? or should it go into some infinite loop? 
@@ -141,7 +172,7 @@ int main(void) {
 		{
 			clock_gettime(CLOCK_REALTIME, &deadline);
 			deadline.tv_sec += 5; // 5 seconds timeout for join
-			rc = pthread_timedjoin(child_sm_controller_tid, &child_sm_controller_status, &deadline);
+			rc = pthread_timedjoin(child_train_controller_tid, &child_train_controller_status, &deadline);
 			if (rc == EOK || (rc != ETIMEDOUT && rc != EINVAL))
 			{	
 				printf("[System] Pthread_timedjoin on state machine returned %d.\nWill terminate train_sense_system thread.\n", rc);
@@ -158,10 +189,10 @@ int main(void) {
 		// safely here means transition related ops are completed (cur_state/next_state are stable)
 		// train_sense_system thread fails if fgets fails, which should broadcast to get state machine out of cond_wait
 		// If the state machine already reached SYS_FAIL on its own, it has exited and this just reaps it.
-		pthread_cancel(child_sm_controller_tid);
-		// sets child_sm_controller_status to PTHREAD_CANCELED if it was cancelled (reached a cancellation point)
+		pthread_cancel(child_train_controller_tid);
+		// sets child_train_controller_status to PTHREAD_CANCELED if it was cancelled (reached a cancellation point)
 		// or EXIT_FAILURE if it exited on its own (reached SYS_FAIL)
-		pthread_join(child_sm_controller_tid, &child_sm_controller_status); 
+		pthread_join(child_train_controller_tid, &child_train_controller_status); 
 
 		// if train_sense_system failed then closed (status = EXIT_FAILURE), or thread failed to join (status = NULL)
 		// then place train in SYS_FAIL state.
@@ -180,6 +211,8 @@ int main(void) {
 		pthread_cancel(train_sense_system_tid);
 		pthread_join(train_sense_system_tid, &train_sense_status);
 	}
+
+	// Also need to worry about cleaning up connections...
 
 	// Need to worry about letting central messenger finish
 	pthread_join(central_massenger_tid, NULL);

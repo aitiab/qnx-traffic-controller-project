@@ -15,18 +15,24 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "message_handling.h"
 
-
+/*
+	Performs a name_open to the attach_point found in server_con_details_t
+	If successful, returns EXIT_SUCCESS
+	If failed, either errno (from name_open) or EINVAL when client_id is invalid. 
+*/
 int establish_connection(server_con_details_t *details)
 {
 	if (details->client_identifier <= _PULSE_CODE_MINAVAIL || details->client_identifier > _PULSE_CODE_MAXAVAIL)
 	{
 		printf("[MH: Error] Client_identifier (%d) is used as pulse code, must be greater than %d\n", details->client_identifier, _PULSE_CODE_MINAVAIL);
-		return MH_EXIT_CLIENTID_ISSUE; // does this error code conflict with other error codes?
+		return EINVAL; // does this error code conflict with other error codes?
 	}
 
+	// any issues with this? what will happen to on going messages etc?
 	if (details->established == 1)
 	{
 		name_close(details->coid);
@@ -46,6 +52,31 @@ int establish_connection(server_con_details_t *details)
 		details->established = 1;
 		printf("[MH: System] Connection established to: %s\n", details->sname);
 		return EXIT_SUCCESS;
+	}
+}
+
+/*
+	Attempts to send admittance message to the server described by details (server_con_details_t).
+	Needs the appropriate SERVER_ADMITTANCE_CODE, and pointer to the reply_t obj
+	In current implementation reply_t wont be changed as server doesn't send reply content back
+	However, if the server does, it will be stored in reply
+	
+	Returns EXIT_SUCCESS if server send back MsgReply(...,EOK, ...)
+	Returns EXIT_FAILURE if SendMsg failed (either sendMsg itself failed, or a MsgError was sent back)
+*/
+int send_admit_message(server_con_details_t *details, int SERVER_ADMITTANCE_CODE, reply_t *reply)
+{
+	msg_t msg = {.client_identifier = details->client_identifier, .type = SERVER_ADMITTANCE_CODE, .subtype = 0, .data = 0};
+	// Since we expected just a EOK to be sent in the reply to indicate admittance, checking EOK only is good.
+	if (send_message_timed(details, &msg, reply, SEND_ADMIT_TIMEOUT_MS) == EXIT_SUCCESS)
+	{
+		printf("[MH: System] Admittance to the server %s succeeded.\n", details->sname);
+		return EXIT_SUCCESS;
+	}
+	else
+	{
+		printf("[MH: Warning] Admittance to the server %s failed.\n", details->sname);
+		return EXIT_FAILURE;
 	}
 }
 
@@ -88,33 +119,43 @@ int cleanup_server(server_create_details_t *details)
 	return EXIT_SUCCESS;
 }
 
+/*
+	Sends a update pulse to the server as described by details (server_con_details)
+	This is used to notify the server of some event. The event will be send as the value of the pulse
+
+	Returns EOK if sucessful
+	Returns some error strerror(errno) if unsuccessful.
+*/
 int send_update_pulses(server_con_details_t *details, int event)
 {
-	if (details->established)
+	//int MsgSendPulse(int coid, int priority, int code, int value);
+	// Priority = -1 = use calling thread's priority.
+	// Should be adjusted if pulses have different urgency, the calling thread's priority causes issues for the reciever etc
+	int err = MsgSendPulse_r(details->coid, -1, details->client_identifier, event);
+	if (err != EOK)
 	{
-		//int MsgSendPulse(int coid, int priority, int code, int value);
-		// Priority = -1 = use calling thread's priority.
-		// Should be adjusted if pulses have different urgency, the calling thread's priority causes issues for the reciever etc
-		int err = MsgSendPulse_r(details->coid, -1, details->client_identifier, event);
-		if (err != EOK)
-		{
-			err = -err; // Flip
-			printf("[MH: Error] Failed to send update pulse. Error is: %s\n", strerror(err));
-			return err;
-		}
-		else
-		{
-			printf("[MH: System] Successfully sent (CID: %d, E: %d) pulse to \"%s\"\n", details->client_identifier, event, details->sname);
-			return err;
-		}
+		err = -err; // Flip
+		printf("[MH: Error] Failed to send update pulse. Error is: %s\n", strerror(err));
+		return err;
 	}
 	else
 	{
-		printf("[MH: Error] Connection to \"%s\" is yet not established. Please establish the connection\n", details->sname);
-		return SEND_PULSE_EXIT_CONNECTION_NOT_ESTABLISHED;
+		printf("[MH: System] Successfully sent (CID: %d, E: %d) pulse to \"%s\"\n", details->client_identifier, event, details->sname);
+		return err;
 	}
+	
 }
 
+/*
+	Does a SendMsg to the server described in details (server_con_details)
+	Uses the msg and reply provided
+
+	Returns EINVAL if the msg type is invalid. (although it is not the only possible reason)
+	Returns EOK if successful (i.e. MsgSend return is not -1) 
+	Although EOK is received. This only indicates the reception and reply to the message. 
+	The reply should be investigated further to determine if request was truly fullfilled.
+	Returns errno (might also be from sendMsg failing?, or from MsgError)
+*/
 // returns EOK on success, otherwise returns the error code. Also reply is filled with the server's response.
 int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 {
@@ -124,9 +165,10 @@ int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 	if ((msg->type > _IO_MAX) == 0)
 	{
 		printf("[MH: Error] The message type must be greater than %d, current it is %d. Message not sent\n", _IO_MAX, msg->type);
-		return EXIT_FAILURE;
+		return EINVAL;
 	}
-
+	// MsgReply's status sets the return value of MsgSend
+	// MsgError sets MsgSend return as -1 and sets errno as the errno set by programmer
 	if (MsgSend(details->coid, msg, sizeof(*msg), reply, sizeof(*reply)) == -1)
 	{
 		printf("[MH: Error] Failed to send message to \"%s\". Error is %s\n", details->sname, strerror(errno));
@@ -137,6 +179,62 @@ int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 		printf("[MH: System] Successfully sent message to \"%s\"\n", details->sname);
 		return EOK;	
 	}
+}
+
+#define MSEC_NSEC 1000000LL // Long long int (64Bit)
+/*
+	Performs a timed SendMsg. Provide it timeout in milliseconds
+	Returns 1 (SEND_TIMED_OUT_NOT_RECEIVED) if MsgSend set errno to ETIMEOUT,
+	returns 2 (SEND_REPLY_EINTR) if MsgSend set errno to EINTR (could be due to UNBLOCK or intentionally MsgReply??)
+	returns 3 (SEND_OTHER_ERROR) if MsgSend set errno to something other than above
+	Returns EXIT_FAILURE when TimeTimeout fails.
+	returns 0 (EXIT_SUCESS) if MsgSend was success.
+*/ 
+int send_message_timed(server_con_details_t *details, msg_t *msg, reply_t *reply, uint64_t ms_timeout)
+{
+	msg->client_identifier = details->client_identifier;
+
+	if ((msg->type > _IO_MAX) == 0)
+	{
+		printf("[MH: Error] The message type must be greater than %d, current it is %d. Message not sent\n", _IO_MAX, msg->type);
+		return EINVAL;
+	}
+
+	// Timerout expects uint64_t *ntime
+	uint64_t timeout_ns = ms_timeout * MSEC_NSEC;
+	// if check err correct? does it lose time before timeout?
+	if (TimerTimeout(CLOCK_MONOTONIC, (_NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY), NULL, &timeout_ns, NULL) != -1)
+	{
+		if (MsgSend(details->coid, msg, sizeof(*msg), reply, sizeof(*reply)) == -1)
+		{
+			if (errno == ETIMEDOUT)
+			{
+				printf("[MH: Error] Failed to send timed message to \"%s\"... Msg was not received by server before time out.\n", details->sname);
+				return SEND_TIMED_OUT_NOT_RECEIVED;
+			}
+			else if (errno == EINTR)
+			{
+				printf("[MH: Error] Failed to send timed message to \"%s\"... Possibly server failed to reply before time out.\n", details->sname);
+				return SEND_REPLY_EINTR;
+			}
+			else
+			{
+				printf("[MH: Error] Failed to send timed message to \"%s\"... Error is %s\n", details->sname, strerror(errno));
+				return SEND_OTHER_ERROR;
+			}
+		}
+		else
+		{
+			printf("[MH: System] Successfully sent timed message to \"%s\"...\n", details->sname);
+			return EXIT_SUCCESS;
+		}
+	}
+	else
+	{
+		return EXIT_FAILURE;
+	}
+
+
 }
 
 

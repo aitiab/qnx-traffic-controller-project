@@ -24,22 +24,41 @@ state_t next_state 	= NRML;
 // NRML = 0, EM_NRML, APRCH, EM_B_CROSS, CROSS, EM_A_CROSS, SUCC_CROSS
 
 // train op normal ->
-int state_transitioner(events_t *ev)
+int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 {
 	uint8_t change_bool = 1;
 	switch(*ev)
 	{
 		//------------------------------------------------------------------------//
 		case DEFAULT:
+		{
 			change_bool = 0;
 			printf("[System] Received DEFAULT event. Maintaining current state (%d) %s\n", cur_state, state_to_string[cur_state]);
 			break;
+		}
 		//------------------------------------------------------------------------//
 		case APRCHNG:
+		{
 			if (cur_state == NRML)
-				next_state = APRCH;
+			{
+				msg_t approach_notify_msg = {.client_identifier = crossing_details->client_identifier, .type = APPROACH_NOTIFY, .subtype = 0, .data = 0};
+				reply_t approach_reply = {0};
+				int rc = send_message_timed(crossing_details, &approach_notify_msg, &approach_reply, MS_NOTIFY_APPROACH);
+				if (rc != EXIT_SUCCESS)
+				{
+					// If approach notification fails, put train in SYS_FAIL state next
+					printf("[Warning] Failed to notify crossing of approaching.");
+					next_state = SYS_FAIL;
+				}
+				else
+				{
+					printf("[System] Notified crossing of approach.");
+					next_state = APRCH;
+				}
+			}
 			else
 				change_bool = 0;
+				
 
 			if (change_bool == 0)
 			{
@@ -51,6 +70,7 @@ int state_transitioner(events_t *ev)
 						state_to_string[cur_state], next_state, state_to_string[next_state]);
 			}
 			break;
+		}
 		//------------------------------------------------------------------------//
 		case EMERG:
 			if (cur_state == APRCH)
