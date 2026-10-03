@@ -2,6 +2,7 @@
 #define SRC_MESSAGE_CONTROLLER_H_
 
 #include "message_handling.h"
+#include "state_controller.h"
 #include <sys/iomsg.h>
 
 #define CROSSING_SERVER_ATTACH_POINT "crossing_controller"
@@ -9,10 +10,13 @@
 // Must match the train controller's message_controller.h
 #define ADMITTER_CODE (_IO_MAX + 1) // should confirm this is valid.
 #define CROSSING_NOTIFY (_IO_MAX + 2)
+#define APPROACH_NOTIFY (_IO_MAX + 3)
+#define EXIT_NOTIFY (_IO_MAX + 4)
 
 #define TRAIN_CONTROLLER_CLIENT_ID (101) // also confirm this
 
 extern server_create_details_t crossing_server_details;
+extern server_con_details_t self_con_details;
 
 void *server_crossing_controller(void *arg);
 

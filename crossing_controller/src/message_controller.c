@@ -14,18 +14,28 @@ server_create_details_t crossing_server_details = {
 	.status = STATUS_RUNNING
 };
 
+server_con_details_t self_con_details = {
+	.established = 0,
+	.coid = -1,
+	.client_identifier = TRAIN_CONTROLLER_CLIENT_ID, 
+	.sname = CROSSING_SERVER_ATTACH_POINT, // What's the consequence of this?
+	.status = STATUS_RUNNING // should it be running on start? 
+};
+
 
 static void _disconnect_handler(void *data);
 static void _unblock_handler(void *data);
 static void client_handler_initaliser(client_details_t *ct);
 static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *info, int rcvid, recv_t *recv);
-static int _my_req_process();
+static int _my_req_process(client_dict_t *client_dict, events_t *ev);
+static void _reply_req_done(client_details_t *ct, int rcvid);
 
 
 void *server_crossing_controller(void *arg)
 {
-	
-	// Need to worry about if establish_server fails, it should send the train in SYS_FAULT state.
+	events_t *ev = (events_t*)arg;
+
+	// Need to worry about if establish_server fails, it should send the train in X1_FAULT state.
 	// establish_server returns EXIT_SUCCESS is succeed, otherwise passes down the errno
 	int rc = establish_server(&crossing_server_details);
 	if (rc != EXIT_SUCCESS)
@@ -167,15 +177,141 @@ void *server_crossing_controller(void *arg)
 		}
 
 		// req processing
-
-
-
+		_my_req_process(&client_dict, ev);
 	}
 }
 
-static int _my_req_process()
+#define EV_TRAIN_APPROACH_STATE_CROSSING_NOTIFIED 1
+#define EV_WARNINGS_ACTIVE_STATE_INTERSECTIONS_NOTIFIED 1
+#define EV_TRAIN_CROSSING_STATE_CROSSING_NOTIFIED 1
+#define EV_TRAIN_EXIT_STATE_CROSSING_NOTIFIED 1
+#define EV_GATE_DOWN_STATE_DOWN 1
+
+// Replies EOK to the train for a finished req, then removes it from the client's reqs
+static void _reply_req_done(client_details_t *ct, int rcvid)
 {
-	
+	reply_t rply = {.status = EOK, .err_msg = "", .data = 0};
+	if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
+	{
+		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d). Error is %s\n", rcvid, strerror(errno));
+	}
+	reqs_remove(ct, rcvid);
+}
+
+// Steps every pending req forward. A finished req is replied to and removed.
+// Returns the number of reqs replied to.
+static int _my_req_process(client_dict_t *client_dict, events_t *ev)
+{
+	int replied = 0;
+	for(uint8_t i = 0; i < client_dict->count; i++)
+	{
+		client_details_t *ct = &client_dict->entries[i];
+		req_array_t *reqs = &ct->reqs;
+		switch (ct->client_id)
+		{
+			case TRAIN_CONTROLLER_CLIENT_ID:
+			{
+				// while, not for -> removing a req moves the last req into slot j, so j only advances if nothing was removed
+				uint8_t j = 0;
+				while (j < reqs->count)
+				{
+					req_t *req = &reqs->entries[j];
+					if (req->type == APPROACH_NOTIFY)
+					{
+						if (req->state == REQ_STATE_INIT) // Notification not yet noted
+						{
+							// Need to consider fail points
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								// Set event to indicate it has occured
+								ev->events[EV_TRAIN_APPROACH] = EV_TRAIN_APPROACH_STATE_CROSSING_NOTIFIED;
+								// Signal the state controller
+								pthread_cond_signal(&ev->cond);
+								pthread_mutex_unlock(&ev->mutex);
+								req->state = REQ_STATE_RUNNING_S1; // Train approach noted. State changed.
+							}
+						}
+
+						if (req->state == REQ_STATE_RUNNING_S1) // Intersections to be notified
+						{
+							// stravation for other? the state_transitioner?
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								// If the event has progressed since first notification
+								// send message to the intersections
+								// depending on result of it, different states
+
+								ev->events[EV_WARNINGS_ACTIVE] = EV_WARNINGS_ACTIVE_STATE_INTERSECTIONS_NOTIFIED;
+								pthread_cond_signal(&ev->cond);
+								pthread_mutex_unlock(&ev->mutex);
+								req->state = REQ_STATE_RUNNING_S2; // Intersections notified. State changed
+							}
+						}
+
+						if (req->state == REQ_STATE_RUNNING_S2) // Check if crossing state is GATES DOWN
+						{
+							// werid but easier than the other option.
+							// use events[GATES_DOWN] as information for this
+							uint8_t safe = 0;
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								if (ev->events[EV_GATE_DOWN] == EV_GATE_DOWN_STATE_DOWN)
+								{
+									safe = 1;
+									ev->events[EV_GATE_DOWN] = 0; // reset it
+								}
+								pthread_mutex_unlock(&ev->mutex);
+							}
+							if (safe == 1)
+							{
+								req->state = REQ_STATE_DONE;
+								_reply_req_done(ct, req->rcvid);
+								replied++;
+								continue; // slot j now holds a different req
+							}
+						}
+					}
+					else if (req->type == CROSSING_NOTIFY)
+					{
+						if (req->state == REQ_STATE_INIT)
+						{
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								ev->events[EV_TRAIN_CROSSING] = EV_TRAIN_CROSSING_STATE_CROSSING_NOTIFIED;
+								pthread_cond_signal(&ev->cond);
+								pthread_mutex_unlock(&ev->mutex);
+								req->state = REQ_STATE_DONE;
+								_reply_req_done(ct, req->rcvid);
+								replied++;
+								continue; // slot j now holds a different req
+							}
+						}
+					}
+					else if (req->type == EXIT_NOTIFY)
+					{
+						if (req->state == REQ_STATE_INIT)
+						{
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								ev->events[EV_TRAIN_EXIT] = EV_TRAIN_EXIT_STATE_CROSSING_NOTIFIED;
+								pthread_cond_signal(&ev->cond);
+								pthread_mutex_unlock(&ev->mutex);
+								req->state	= REQ_STATE_DONE;
+								_reply_req_done(ct, req->rcvid);
+								replied++;
+								continue; // slot j now holds a different req
+							}
+						}
+					}
+					j++;
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
+	return replied;
 }
 
 // returns EXIT_SUCCESS if the message was handled. EXIT_FAILURE if it wasnt (i.e. end of the func was reached)
@@ -203,9 +339,9 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 
 	if (ct->client_id == TRAIN_CONTROLLER_CLIENT_ID)
 	{
-		if (recv->msg.type == CROSSING_NOTIFY)
+		if (recv->msg.type == APPROACH_NOTIFY || recv->msg.type == CROSSING_NOTIFY || recv->msg.type == EXIT_NOTIFY)
 		{
-			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv->msg.type, .subtype = recv->msg.subtype};
+			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv->msg.type, .subtype = recv->msg.subtype, .state = REQ_STATE_INIT};
 			if (reqs_add(ct, REQ_ADD_REPLACE, rq) == REQ_BUFF_FULL)
 			{
 				reply_t rply = {.status = EAGAIN, .err_msg = "REQ_BUFF_FULL", .data = 0};
@@ -217,10 +353,10 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 						MsgError(rcvid, EAGAIN);
 					}
 				}
-				printf("[CrossServer: Warning] Train sent CROSSING_NOTIFY but the request buffer was full. Returned EAGAIN.\n");
+				printf("[CrossServer: Warning] Train sent request (type %d) but the request buffer was full. Returned EAGAIN.\n", recv->msg.type);
 			}
 			else
-				printf("[CrossServer: System] Train sent CROSSING_NOTIFY, request saved.\n");
+				printf("[CrossServer: System] Train sent request (type %d), request saved.\n", recv->msg.type);
 		
 			return EXIT_SUCCESS;
 		}
@@ -231,7 +367,7 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 
 static void _disconnect_handler(void *data)
 {
-	//
+	
 }
 
 static void _unblock_handler(void *data)

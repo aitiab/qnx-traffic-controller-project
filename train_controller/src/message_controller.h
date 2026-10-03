@@ -10,6 +10,8 @@
 // Must match the crossing controller's message_controller.h
 #define ADMITTER_CODE (_IO_MAX + 1) // should confirm this is valid.
 #define CROSSING_NOTIFY (_IO_MAX + 2)
+#define APPROACH_NOTIFY (_IO_MAX + 3)
+#define EXIT_NOTIFY (_IO_MAX + 4)
 
 #define TRAIN_CONTROLLER_CLIENT_ID (101) // also confirm this
 
