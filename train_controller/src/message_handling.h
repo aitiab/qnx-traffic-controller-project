@@ -44,8 +44,11 @@ typedef struct {
 	int data;
 } msg_t;
 
+#define ERR_MSG_SIZE 20;
 typedef struct
 {
+	int status;
+	char *err_msg[ERR_MSG_SIZE];
 	int data;
 } reply_t;
 

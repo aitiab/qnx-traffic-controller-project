@@ -55,7 +55,7 @@ void *server_crossing_controller(void *arg)
 		if (rcvid == -1)
 		{
 			printf("[CrossServer: Warning] Failed to receive message. Error is %s\n", strerror(errno));
-			continue;
+			//continue;
 		}
 
 		if (rcvid == 0)
@@ -128,7 +128,7 @@ void *server_crossing_controller(void *arg)
 					break;
 			}
 
-			continue; // go back to the top of the while loop
+			//continue; // go back to the top of the while loop
 		}
 
 
@@ -143,17 +143,14 @@ void *server_crossing_controller(void *arg)
 				printf("\n[CrossServer: System] Server recieved _IO_CONNECT message and replyed with EOK\n");
 				continue;
 			}
-
-			if (recv.msg.type > _IO_BASE && recv.msg.type <= _IO_MAX)
+			else if (recv.msg.type > _IO_BASE && recv.msg.type <= _IO_MAX)
 			{
 				MsgError(rcvid, ENOSYS);
 				printf("\n[CrossServer: System] Server recieved IO message and rejected it (ENOSYS)\n");
 				continue;
 			}
-			
-
 			// need to add my own admitter. (separate form the IO_CONNECT>)
-			if (recv.msg.type == ADMITTER_CODE)
+			else if (recv.msg.type == ADMITTER_CODE)
 			{
 				// client add or get will reset the client_details_t if update_if_exists = 1. includes cancelling all reqs
 				client_dict_add_get_return_t r = client_dict_get_or_add(&client_dict, info.scoid, recv.msg.client_identifier, CLIENT_UPDATE_IF_EXISTS);
@@ -167,44 +164,78 @@ void *server_crossing_controller(void *arg)
 				printf("\n[CrossServer: System] Server recieved ADMITTER message and replyed with EOK\n");
 				continue;
 			}
+			else
+			{
+				if (_my_message_handler(&client_dict, info, rcvid, recv) == EXIT_FAILURE)
+				{
+					// If my handlers couldnt handle the message, then no func exists to deal with it
+					MsgError(rcvid, ENOSYS);
+				}
+			}
 			
-			// have update set to off does mean even if client_id has changed (scoid reused) we believe its the same client
-			// but if they disconnected it should be removed in the disconnect pulse handling. so i wonder if this is ok
-			client_details_t *ct = client_dict_lookup_scoid(&client_dict, info.scoid);
+		}
 
-			if (ct == NULL)
+		// req processing
+
+
+
+	}
+}
+
+static int _my_req_process()
+{
+	
+}
+
+// returns EXIT_SUCCESS if the message was handled. EXIT_FAILURE if it wasnt (i.e. end of the func was reached)
+static int _my_message_handler(client_dict_t *client_dict, _msg_info info, int rcvid, recv_t recv)
+{
+	// if client_id has changed (scoid reused) we believe its the same client
+	// but if they disconnected it should be removed in the disconnect pulse handling. so i wonder if this is ok
+	client_details_t *ct = client_dict_lookup_scoid(client_dict, info.scoid);
+
+	if (ct == NULL)
+	{
+		// Maybe should send something in the reply? Some data and not just a error?
+		printf("[MH: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
+		MsgError(rcvid, EINVAL);
+		// If not found in the list, then ignore this rcvid
+		return EXIT_SUCCESS; // ???
+	}
+
+	// if at this point then client exists and valid
+
+	if (ct->state == CLIENT_BASE_DETAILS_SET)
+	{
+		client_handler_initaliser(ct);
+	}
+
+	if (ct->client_id == TRAIN_CONTROLLER_CLIENT_ID)
+	{
+		if (recv.msg.type == CROSSING_NOTIFY)
+		{
+			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv.msg.type, .subtype = recv.msg.subtype};
+			if (reqs_add(ct, REQ_ADD_REPLACE, rq) == REQ_BUFF_FULL)
 			{
-				// Maybe should send something in the reply? Some data and not just a error?
-				printf("[MH: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
-				MsgError(rcvid, EINVAL);
-				// If not found in the list, then ignore this rcvid
-				continue;
+				reply_t rply = {.status = EAGAIN, .err_msg = "REQ_BUFF_FULL", .data = 0}
+				// EOK indicates message was recieved by server, but they check .status = EBUSY and .err_msg
+				if (MsgReply(rcvid, EOK, &r, sizeof(r)) == -1)
+				{
+					if (errno != ESRCH)
+					{
+						MsgError(rcvid, EAGAIN);
+					}
+				}
+				printf("[CrossServer: Warning] Train sent CROSSING_NOTIFY but the request buffer was buffer. Returned EAGAIN.\n");
 			}
-
-			// if at this point then client exists and valid
-
-			if (ct->state == CLIENT_BASE_DETAILS_SET)
-			{
-				client_handler_initaliser(ct);
-			}
-
-			if (ct->client_id == CROSSING_CONTROLLER_CLIENT_ID)
-			{
-
-			}
-			//reqs_add(&ct, REQ_ADD_REPLACE)
-			//ct->reqs
-			
-
-			reply_t reply = {
-				.data = 0 // Just a dummy reply for now.
-			};
-			if (MsgReply(rcvid, EOK, &reply, sizeof(reply)) == -1)
-			{
-				printf("[CrossServer: Error] Failed to reply to the message from central controller. Error is %s\n", strerror(errno));
-			}
+			else
+				printf("[CrossServer: System] Train sent CROSSING_NOTIFY, request saved.\n")
+		
+			return EXIT_SUCCESS;
 		}
 	}
+
+	return EXIT_FAILURE;
 }
 
 static void _disconnect_handler(void *data)
@@ -223,7 +254,7 @@ static void client_handler_initaliser(client_details_t *ct)
 {
 	switch (ct->client_id)
 	{
-	case CROSSING_CONTROLLER_CLIENT_ID:
+	case TRAIN_CONTROLLER_CLIENT_ID:
 		ct->disconnect_handler = _disconnect_handler;
 		ct->unblock_handler = _unblock_handler;
 		ct->state = CLIENT_ALL_DETAILS_SET;
