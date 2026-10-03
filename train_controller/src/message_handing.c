@@ -294,9 +294,9 @@ static void fail_req(client_details_t *ct, int rcvid)
 	}
 }
 
-// adds r to the client's pending requests
+// adds req r to the client's pending requests
 // If full and replace_existing == REQ_ADD_REPLACE, the first replaceable request is failed with EAGAIN and overwritten
-// Returns EXIT_SUCCESS on success, REQ_BUFF_FULL if there was no room
+// Returns EXIT_SUCCESS on success, and returns REQ_BUFF_FULL if there was no room
 int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r)
 {
 	req_array_t *reqs = &ct->reqs;
@@ -326,13 +326,13 @@ int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r)
 	return REQ_BUFF_FULL;
 }
 
-// Removes the req r if its found in ct->reqs. If found returns EXIT_SUCCESS. If not found returns EXIT_FAILURE
-int reqs_remove(client_details_t *ct, req_t r)
+// Removes the req (identified by rcvid) if its found in ct->reqs. If found returns EXIT_SUCCESS. If not found returns EXIT_FAILURE
+int reqs_remove(client_details_t *ct, int rcvid)
 {
 	req_array_t *reqs = &ct->reqs;
 	for (int i = 0; i < reqs->count; i++)
 	{
-		if (reqs->entries[i].rcvid == r.rcvid)
+		if (reqs->entries[i].rcvid == rcvid)
 		{
 			// like in client_dict, fill this space with the last entry and decrement.
 			// shallow copy is fine here?
@@ -343,7 +343,7 @@ int reqs_remove(client_details_t *ct, req_t r)
 	return EXIT_FAILURE;
 }
 
-// closes all reqs for the client and empties its req array
+// closes all reqs for the client and empties its req array. Returns EXIT_SUCCESS on func exit.
 int close_all_reqs(client_details_t *ct)
 {
 	req_array_t *reqs = &ct->reqs;

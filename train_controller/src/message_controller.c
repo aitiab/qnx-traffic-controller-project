@@ -31,6 +31,14 @@ server_create_details_t crossing_server_details = {
 	.status = STATUS_RUNNING
 };
 
+
+static void _disconnect_handler(void *data);
+static void _unblock_handler(void *data);
+static void client_handler_initaliser(client_details_t *ct);
+static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *info, int rcvid, recv_t *recv);
+static int _my_req_process();
+
+
 void *server_crossing_controller(void *arg)
 {
 	
@@ -166,7 +174,7 @@ void *server_crossing_controller(void *arg)
 			}
 			else
 			{
-				if (_my_message_handler(&client_dict, info, rcvid, recv) == EXIT_FAILURE)
+				if (_my_message_handler(&client_dict, &info, rcvid, &recv) == EXIT_FAILURE)
 				{
 					// If my handlers couldnt handle the message, then no func exists to deal with it
 					MsgError(rcvid, ENOSYS);
@@ -188,16 +196,16 @@ static int _my_req_process()
 }
 
 // returns EXIT_SUCCESS if the message was handled. EXIT_FAILURE if it wasnt (i.e. end of the func was reached)
-static int _my_message_handler(client_dict_t *client_dict, _msg_info info, int rcvid, recv_t recv)
+static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *info, int rcvid, recv_t *recv)
 {
 	// if client_id has changed (scoid reused) we believe its the same client
 	// but if they disconnected it should be removed in the disconnect pulse handling. so i wonder if this is ok
-	client_details_t *ct = client_dict_lookup_scoid(client_dict, info.scoid);
+	client_details_t *ct = client_dict_lookup_scoid(client_dict, info->scoid);
 
 	if (ct == NULL)
 	{
 		// Maybe should send something in the reply? Some data and not just a error?
-		printf("[MH: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
+		printf("[CrossServer: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
 		MsgError(rcvid, EINVAL);
 		// If not found in the list, then ignore this rcvid
 		return EXIT_SUCCESS; // ???
@@ -212,24 +220,24 @@ static int _my_message_handler(client_dict_t *client_dict, _msg_info info, int r
 
 	if (ct->client_id == TRAIN_CONTROLLER_CLIENT_ID)
 	{
-		if (recv.msg.type == CROSSING_NOTIFY)
+		if (recv->msg.type == CROSSING_NOTIFY)
 		{
-			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv.msg.type, .subtype = recv.msg.subtype};
+			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv->msg.type, .subtype = recv->msg.subtype};
 			if (reqs_add(ct, REQ_ADD_REPLACE, rq) == REQ_BUFF_FULL)
 			{
-				reply_t rply = {.status = EAGAIN, .err_msg = "REQ_BUFF_FULL", .data = 0}
-				// EOK indicates message was recieved by server, but they check .status = EBUSY and .err_msg
-				if (MsgReply(rcvid, EOK, &r, sizeof(r)) == -1)
+				reply_t rply = {.status = EAGAIN, .err_msg = "REQ_BUFF_FULL", .data = 0};
+				// EOK indicates message was recieved by server, but they check .status = EGAIN and .err_msg
+				if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
 				{
 					if (errno != ESRCH)
 					{
 						MsgError(rcvid, EAGAIN);
 					}
 				}
-				printf("[CrossServer: Warning] Train sent CROSSING_NOTIFY but the request buffer was buffer. Returned EAGAIN.\n");
+				printf("[CrossServer: Warning] Train sent CROSSING_NOTIFY but the request buffer was full. Returned EAGAIN.\n");
 			}
 			else
-				printf("[CrossServer: System] Train sent CROSSING_NOTIFY, request saved.\n")
+				printf("[CrossServer: System] Train sent CROSSING_NOTIFY, request saved.\n");
 		
 			return EXIT_SUCCESS;
 		}

@@ -44,11 +44,11 @@ typedef struct {
 	int data;
 } msg_t;
 
-#define ERR_MSG_SIZE 20;
+#define ERR_MSG_SIZE 20
 typedef struct
 {
 	int status;
-	char *err_msg[ERR_MSG_SIZE];
+	char err_msg[ERR_MSG_SIZE];
 	int data;
 } reply_t;
 
@@ -88,7 +88,7 @@ typedef struct {
 // struct for passing data into the disconnect and unblock handlers
 typedef struct
 {
-	client_detail_t *ct; 
+	client_details_t *ct; 
 	void *data;
 } client_handler_data_t;
 
@@ -152,7 +152,7 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach);
 #define REQ_BUFF_FULL 			-1
 int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r);
 int close_all_reqs(client_details_t *ct);
-int close_all_reqs(client_details_t *ct);
+int reqs_remove (client_details_t *ct, int rcvid);
 
 int add_to_log_buffer(log_buffer_t *buff, uint32_t data);
 int read_from_log_buffer(log_buffer_t *buff, uint32_t *data);
