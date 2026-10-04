@@ -12,8 +12,9 @@
 #define CROSSING_NOTIFY (_IO_MAX + 2)
 #define APPROACH_NOTIFY (_IO_MAX + 3)
 #define EXIT_NOTIFY (_IO_MAX + 4)
+#define FAULT_NOTIFY (_IO_MAX + 5)
 
-#define TRAIN_CONTROLLER_CLIENT_ID (101) // also confirm this
+#define TRAIN_CONTROLLER_CLIENT_ID (_PULSE_CODE_MINAVAIL + 51) // also confirm this
 
 // let these accessable outside.
 extern log_buffer_t pulses_to_central;

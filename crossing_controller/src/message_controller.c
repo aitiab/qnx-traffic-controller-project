@@ -3,8 +3,26 @@
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
+#include <semaphore.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "message_controller.h"
+
+
+log_buffer_t pulses_to_central = {
+	.mutex 	= PTHREAD_MUTEX_INITIALIZER,
+	.cond 	= PTHREAD_COND_INITIALIZER
+};
+
+// Connection details to central controller
+server_con_details_t central_con_details = {
+	.established = 0,
+	.coid = -1,
+	.client_identifier = CROSSING_CONTROLLER_CLIENT_ID, // need to discuss with the central controller
+	.sname = QNET_CENTRAL_CONTROLLER_ATTACH_POINT,
+	.status = STATUS_RUNNING
+};
 
 
 server_create_details_t crossing_server_details = {
@@ -17,7 +35,7 @@ server_create_details_t crossing_server_details = {
 server_con_details_t self_con_details = {
 	.established = 0,
 	.coid = -1,
-	.client_identifier = TRAIN_CONTROLLER_CLIENT_ID, 
+	.client_identifier = CROSSING_CONTROLLER_CLIENT_ID, 
 	.sname = CROSSING_SERVER_ATTACH_POINT, // What's the consequence of this?
 	.status = STATUS_RUNNING // should it be running on start? 
 };
@@ -33,7 +51,9 @@ static void _reply_req_done(client_details_t *ct, int rcvid);
 
 void *server_crossing_controller(void *arg)
 {
-	events_t *ev = (events_t*)arg;
+	server_crossing_controller_data *_d = (server_crossing_controller_data *)arg;
+	events_t *ev = _d->ev;
+	sem_t *sem = _d->sem;
 
 	// Need to worry about if establish_server fails, it should send the train in X1_FAULT state.
 	// establish_server returns EXIT_SUCCESS is succeed, otherwise passes down the errno
@@ -41,9 +61,14 @@ void *server_crossing_controller(void *arg)
 	if (rc != EXIT_SUCCESS)
 	{
 		crossing_server_details.status = STATUS_FAILED;
+		// Use also as a synchronisation primitive for the crossing_server_details.status. It will also be checked by crossing_controller.c
+		sem_post(sem);
 		printf("[Error] Failed to establish server for the crossing controller...\n\"server_crossing_controller\" thread is exiting.\n");
 		return (void *)EXIT_FAILURE;
 	}
+
+	// Indicate the server has been established. (Could use a barrier?)
+	sem_post(sem);
 
 	// will this {0} set both count and the inner struct?
 	client_dict_t client_dict = {0};
@@ -72,7 +97,7 @@ void *server_crossing_controller(void *arg)
 			// 	printf("[CrossServer: Error] Clients dict is full. Will drop this pulse. Might be fatal\n");
 			// }
 			
-			client_handler_data_t ct_d = {.ct = ct, .data = NULL};
+			client_handler_data_t ct_d = {.ct = ct, .data = ev};
 
 			switch (recv.pulse.code)
 			{
@@ -104,6 +129,7 @@ void *server_crossing_controller(void *arg)
 					}
 					break;
 				case _PULSE_CODE_UNBLOCK:
+				{
 					printf("[CrossServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
 					
 					int unblocked_rcvid = recv.pulse.value.sival_int;
@@ -123,12 +149,29 @@ void *server_crossing_controller(void *arg)
 					// recv.pulse.value.sival_int holds the recv
 					MsgError(unblocked_rcvid, EINTR);
 					break;
-				// My codes. should use it to get the clientID and set the disconnect and unblock handler.
+				}
+				// My codes. maybe use a my_codes func to make code more legible
+				case CROSSING_CONTROLLER_CLIENT_ID:
+				{
+					switch (recv.pulse.value.sival_int)
+					{
+						case SELF_WAKE_PULSE:
+						{
+							printf("[CrossServer: System] Received a wakeup pulse from CROSSING_CONTROLLER\n");
+							break;
+						}
+						default:
+						{
+							printf("[CrossServer: Warning] Received unknown pulse (value: %d) from CROSSING_CONTROLLER\n", recv.pulse.value.sival_int);
+							break;
+						}
+					}
+					break;
+				}
 				default:
 					printf("[CrossServer: Warning] Received unknown pulse code %d. Value is %d\n", recv.pulse.code, recv.pulse.value.sival_int);
 					break;
 			}
-
 			//continue; // go back to the top of the while loop
 		}
 
@@ -181,16 +224,22 @@ void *server_crossing_controller(void *arg)
 	}
 }
 
-#define EV_TRAIN_APPROACH_STATE_CROSSING_NOTIFIED 1
-#define EV_WARNINGS_ACTIVE_STATE_INTERSECTIONS_NOTIFIED 1
-#define EV_TRAIN_CROSSING_STATE_CROSSING_NOTIFIED 1
-#define EV_TRAIN_EXIT_STATE_CROSSING_NOTIFIED 1
-#define EV_GATE_DOWN_STATE_DOWN 1
 
 // Replies EOK to the train for a finished req, then removes it from the client's reqs
 static void _reply_req_done(client_details_t *ct, int rcvid)
 {
 	reply_t rply = {.status = EOK, .err_msg = "", .data = 0};
+	if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
+	{
+		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d). Error is %s\n", rcvid, strerror(errno));
+	}
+	reqs_remove(ct, rcvid);
+}
+
+// Replies EFAULT to the train to inform of crossing controller failures, then removes it from the client's reqs
+static void _reply_req_fail(client_details_t *ct, int rcvid)
+{
+	reply_t rply = {.status = EFAULT, .err_msg = "STOP_TRAIN", .data = 0};
 	if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
 	{
 		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d). Error is %s\n", rcvid, strerror(errno));
@@ -223,6 +272,16 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 							// Need to consider fail points
 							if (pthread_mutex_lock(&ev->mutex) == EOK)
 							{
+								// If the X1_FAULT event is on, then send error message to the train to stop
+								if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+								{
+									pthread_mutex_unlock(&ev->mutex);
+
+									_reply_req_fail(ct, req->rcvid);
+									replied++;
+									continue;
+								}
+								// If it reached this point then the X1_FAULT is not on.
 								// Set event to indicate it has occured
 								ev->events[EV_TRAIN_APPROACH] = EV_TRAIN_APPROACH_STATE_CROSSING_NOTIFIED;
 								// Signal the state controller
@@ -231,12 +290,20 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								req->state = REQ_STATE_RUNNING_S1; // Train approach noted. State changed.
 							}
 						}
-
 						if (req->state == REQ_STATE_RUNNING_S1) // Intersections to be notified
 						{
 							// stravation for other? the state_transitioner?
 							if (pthread_mutex_lock(&ev->mutex) == EOK)
 							{
+								if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+								{
+									pthread_mutex_unlock(&ev->mutex);
+
+									_reply_req_fail(ct, req->rcvid);
+									replied++;
+									continue;
+								}
+
 								// If the event has progressed since first notification
 								// send message to the intersections
 								// depending on result of it, different states
@@ -255,6 +322,15 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 							uint8_t safe = 0;
 							if (pthread_mutex_lock(&ev->mutex) == EOK)
 							{
+								if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+								{
+									pthread_mutex_unlock(&ev->mutex);
+
+									_reply_req_fail(ct, req->rcvid);
+									replied++;
+									continue;
+								}
+
 								if (ev->events[EV_GATE_DOWN] == EV_GATE_DOWN_STATE_DOWN)
 								{
 									safe = 1;
@@ -277,6 +353,15 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 						{
 							if (pthread_mutex_lock(&ev->mutex) == EOK)
 							{
+								if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+								{
+									pthread_mutex_unlock(&ev->mutex);
+
+									_reply_req_fail(ct, req->rcvid);
+									replied++;
+									continue;
+								}
+
 								ev->events[EV_TRAIN_CROSSING] = EV_TRAIN_CROSSING_STATE_CROSSING_NOTIFIED;
 								pthread_cond_signal(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
@@ -293,6 +378,15 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 						{
 							if (pthread_mutex_lock(&ev->mutex) == EOK)
 							{
+								if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+								{
+									pthread_mutex_unlock(&ev->mutex);
+
+									_reply_req_fail(ct, req->rcvid);
+									replied++;
+									continue;
+								}
+
 								ev->events[EV_TRAIN_EXIT] = EV_TRAIN_EXIT_STATE_CROSSING_NOTIFIED;
 								pthread_cond_signal(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
@@ -300,6 +394,22 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								_reply_req_done(ct, req->rcvid);
 								replied++;
 								continue; // slot j now holds a different req
+							}
+						}
+					}
+					else if (req->type == FAULT_NOTIFY)
+					{
+						if (req->state == REQ_STATE_INIT)
+						{
+							if (pthread_mutex_lock(&ev->mutex) == EOK)
+							{
+								ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
+								pthread_cond_signal(&ev->cond);
+								pthread_mutex_unlock(&ev->mutex);
+								req->state = REQ_STATE_DONE;
+								_reply_req_done(ct, req->rcvid);
+								replied++;
+								continue;
 							}
 						}
 					}
@@ -339,7 +449,7 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 
 	if (ct->client_id == TRAIN_CONTROLLER_CLIENT_ID)
 	{
-		if (recv->msg.type == APPROACH_NOTIFY || recv->msg.type == CROSSING_NOTIFY || recv->msg.type == EXIT_NOTIFY)
+		if (recv->msg.type == APPROACH_NOTIFY || recv->msg.type == CROSSING_NOTIFY || recv->msg.type == EXIT_NOTIFY || recv->msg.type == FAULT_NOTIFY)
 		{
 			req_t rq = {.rcvid = rcvid, .replaceable = REQ_NOT_REPLACEABLE, .type = recv->msg.type, .subtype = recv->msg.subtype, .state = REQ_STATE_INIT};
 			if (reqs_add(ct, REQ_ADD_REPLACE, rq) == REQ_BUFF_FULL)
@@ -367,7 +477,25 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 
 static void _disconnect_handler(void *data)
 {
-	
+	client_handler_data_t *_d = (client_handler_data_t*)data;
+	client_details_t *ct = _d->ct;
+	events_t *ev = (events_t*)_d->data;
+	switch (ct->client_id)
+	{
+		case TRAIN_CONTROLLER_CLIENT_ID:
+		{
+			if (pthread_mutex_lock(&ev->mutex) == EOK)
+			{
+				ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
+				pthread_cond_signal(&ev->cond);
+				pthread_mutex_unlock(&ev->mutex);
+			}
+			// need to worry about what happens if mutex lock fails
+			break;
+		}
+		default:
+			break;
+	}
 }
 
 static void _unblock_handler(void *data)
@@ -390,4 +518,76 @@ static void client_handler_initaliser(client_details_t *ct)
 		printf("[CrossServer: Error] ClientID not recognised, could not set the disconnect and unblock handlers\n");
 		break;
 	}
+}
+
+
+// Need to handle lost updates.
+void *subserver_central_messenger(void *arg)
+{
+	// Employee handling messages to central server asynchronously
+
+
+	// What should happen if it fails to connect to central controller?
+	// Timed reconnection?. Just die?
+	int rc = establish_connection(&central_con_details);
+	if (rc != EXIT_SUCCESS)
+	{
+		central_con_details.status = STATUS_FAILED;
+		printf("[Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");
+		return (void *)EXIT_FAILURE;
+	}
+
+
+	int event_given = 0; // indicate if thread should sleep as there is no work
+	int should_sleep = 0;
+	int event = 0;
+	uint32_t data = 0;
+
+	// Is while 1 a good idea? should there be an exit strategy?
+	while (1)
+	{
+		event_given = 0; // indicate if thread should sleep as there is no work
+		should_sleep = 0;
+		event = 0;
+
+		rc = read_from_log_buffer(&pulses_to_central, &data);
+		if (rc == EOK)
+		{
+			event = data;
+			event_given = 1;
+		}
+		else
+		{
+			printf("[Warning] Failed to get pulses from pulses_to_central buffer due to mutex lock: %s\n", strerror(rc));
+		}
+
+		if (event_given)
+		{
+			rc = send_update_pulses(&central_con_details, event);
+			if (rc != EOK)
+			{
+				if (rc == EAGAIN)
+				{
+					printf("[Warning] Central controller's kernel had insufficient resources to enqueue pulse.\nThe update message is lost");
+					should_sleep = 1;
+				}
+				else
+				{
+					central_con_details.status = STATUS_FAILED;
+					printf("[Error] send_update_pulses failed. The central controller messenger thread is exiting.\n");
+					return (void *)EXIT_FAILURE;
+				}
+			}
+		}
+
+		if (should_sleep)
+		{
+			sleep(2); // No work to do, sleep for some seconds.
+		}
+
+	}
+
+
+
+	return NULL;
 }

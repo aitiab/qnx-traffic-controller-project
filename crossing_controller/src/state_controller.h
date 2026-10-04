@@ -21,7 +21,16 @@ extern state_t next_state;
 #define EV_TRAIN_CROSSING 4
 #define EV_TRAIN_EXIT 5
 #define EV_GATE_RAISED 6
-#define EV_COUNT 7
+#define EV_X1_FAULT 7
+#define EV_COUNT 8
+
+
+#define EV_TRAIN_APPROACH_STATE_CROSSING_NOTIFIED 1
+#define EV_WARNINGS_ACTIVE_STATE_INTERSECTIONS_NOTIFIED 1
+#define EV_TRAIN_CROSSING_STATE_CROSSING_NOTIFIED 1
+#define EV_TRAIN_EXIT_STATE_CROSSING_NOTIFIED 1
+#define EV_GATE_DOWN_STATE_DOWN 1
+#define EV_X1_FAULT_STATE_ON 1
 
 typedef struct
 {
@@ -35,8 +44,9 @@ typedef struct
 // --------------------------- END Events Definition ------------------------------- //
 
 void *state_transitioner(void *arg);
-void activate_flashers(void);
-void gates_down(void);
+int state_transition_message(void);
+int activate_flashers(void);
+int gates_down(void);
 void gates_up(void);
 
 #endif /* SRC_STATE_CONTROLLER_H_ */

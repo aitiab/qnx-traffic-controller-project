@@ -56,11 +56,18 @@ typedef struct
 // --------------------------- START Client Dictionary Definitions ------------------------------- //
 #define REQ_REPLACEABLE 	1
 #define REQ_NOT_REPLACEABLE 0
+
+#define REQ_STATE_INIT 0
+#define REQ_STATE_RUNNING_S1 1
+#define REQ_STATE_RUNNING_S2 2
+#define REQ_STATE_RUNNING_S3 3
+#define REQ_STATE_DONE 4 
 typedef struct {
 	int 		rcvid;
 	uint16_t 	type;
 	uint16_t 	subtype;
 	uint8_t 	replaceable; // if this req can be dropped when the array is full and a new item has to be put in
+	uint8_t 	state;
 } req_t;
 
 // Pending requests per client
