@@ -42,7 +42,7 @@ typedef struct {
 	uint16_t subtype;
 	int8_t client_identifier;
 	int data;
-} msg_t;
+} mh_msg_t;
 
 #define ERR_MSG_SIZE 20
 typedef struct
@@ -108,7 +108,7 @@ typedef struct {
 // --------------------------- END Client Dictionary Definitions ------------------------------- //
 
 typedef union {
-	msg_t 			msg;
+	mh_msg_t 			msg;
 	struct _pulse pulse;
 } recv_t;
 
@@ -130,12 +130,12 @@ int send_update_pulses(server_con_details_t *details, int event);
 int cleanup_connection(server_con_details_t *details);
 
 int establish_server(server_create_details_t *details);
-int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply);
+int send_message(server_con_details_t *details, mh_msg_t *msg, reply_t *reply);
 
 #define SEND_TIMED_OUT_NOT_RECEIVED 1
 #define SEND_REPLY_EINTR 2 // could be from unblock or an actual EINTR errorMsg although would be a bad design?
 #define SEND_OTHER_ERROR 3
-int send_message_timed(server_con_details_t *details, msg_t *msg, reply_t *reply, uint64_t ms_timeout);
+int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *reply, uint64_t ms_timeout);
 #define SEND_ADMIT_TIMEOUT_MS 500
 int send_admit_message(server_con_details_t *details, int SERVER_ADMITTANCE_CODE, reply_t *reply);
 int cleanup_server(server_create_details_t *details);

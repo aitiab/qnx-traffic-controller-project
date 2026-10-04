@@ -40,7 +40,7 @@ void *child_train_controller(void *arg)
 	{
 		printf("[Error] Failed to connect to the crossing server. Moving state to SYS_FAIL.\n");
 		events_t ev = CRITICAL_FAILURE;
-		int message = state_transitioner(&ev);
+		int message = state_transitioner(&ev, &crossing_con_details);
 		cur_state = next_state;
 		if (message != -1)
 			add_to_log_buffer(&pulses_to_central, (uint32_t)message);
@@ -52,7 +52,7 @@ void *child_train_controller(void *arg)
 	{
 		printf("[Error] Failed to gain admission to the crossing server. Moving state to SYS_FAIL.\n");
 		events_t ev = CRITICAL_FAILURE;
-		int message = state_transitioner(&ev);
+		int message = state_transitioner(&ev, &crossing_con_details);
 		cur_state = next_state;
 		if (message != -1)
 			add_to_log_buffer(&pulses_to_central, (uint32_t)message);
@@ -68,31 +68,19 @@ void *child_train_controller(void *arg)
 		switch (cur_state){
 		case NRML:
 			wait_for_event(&ev);
-			message = state_transitioner(&ev);
+			message = state_transitioner(&ev, &crossing_con_details);
 			if (message != -1)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
 			break;
 		case APRCH:
 			wait_for_event(&ev);
-			message = state_transitioner(&ev);
-			if (message != -1)
-				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
-			break;
-		case EM_B_CROSS:
-			wait_for_event(&ev);
-			message = state_transitioner(&ev);
+			message = state_transitioner(&ev, &crossing_con_details);
 			if (message != -1)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
 			break;
 		case CROSS:
 			wait_for_event(&ev);
-			message = state_transitioner(&ev);
-			if (message != -1)
-				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
-			break;
-		case EM_A_CROSS:
-			wait_for_event(&ev);
-			message = state_transitioner(&ev);
+			message = state_transitioner(&ev, &crossing_con_details);
 			if (message != -1)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
 			break;
@@ -199,7 +187,7 @@ int main(void) {
 		if (((intptr_t)train_sense_status == EXIT_FAILURE || train_sense_status == NULL) && cur_state != SYS_FAIL)
 		{
 			events_t ev = CRITICAL_FAILURE;
-			int message = state_transitioner(&ev);
+			int message = state_transitioner(&ev, &crossing_con_details);
 			cur_state = next_state;
 			if (message != -1)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);

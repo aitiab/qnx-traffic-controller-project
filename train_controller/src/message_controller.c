@@ -18,7 +18,7 @@ log_buffer_t pulses_to_central = {
 server_con_details_t central_con_details = {
 	.established = 0,
 	.coid = -1,
-	.client_identifier = 101, // need to discuss with the central controller
+	.client_identifier = TRAIN_CONTROLLER_CLIENT_ID, // need to discuss with the central controller
 	.sname = QNET_CENTRAL_CONTROLLER_ATTACH_POINT, // What's the consequence of this?
 	.status = STATUS_RUNNING
 };

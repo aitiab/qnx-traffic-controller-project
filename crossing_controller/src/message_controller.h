@@ -8,6 +8,7 @@
 
 #define QNET_CENTRAL_CONTROLLER_ATTACH_POINT "/net/VM_x86_Target01/dev/name/local/central_controller"
 #define CROSSING_SERVER_ATTACH_POINT "crossing_controller"
+#define QNET_CROSSING_SERVER_ATTACH_POINT "/net/VM_x86_Target03/dev/name/local/crossing_controller"
 
 // Must match the train controller's message_controller.h
 #define ADMITTER_CODE (_IO_MAX + 1) // should confirm this is valid.

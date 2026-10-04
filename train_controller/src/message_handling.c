@@ -66,7 +66,7 @@ int establish_connection(server_con_details_t *details)
 */
 int send_admit_message(server_con_details_t *details, int SERVER_ADMITTANCE_CODE, reply_t *reply)
 {
-	msg_t msg = {.client_identifier = details->client_identifier, .type = SERVER_ADMITTANCE_CODE, .subtype = 0, .data = 0};
+	mh_msg_t msg = {.client_identifier = details->client_identifier, .type = SERVER_ADMITTANCE_CODE, .subtype = 0, .data = 0};
 	// Since we expected just a EOK to be sent in the reply to indicate admittance, checking EOK only is good.
 	if (send_message_timed(details, &msg, reply, SEND_ADMIT_TIMEOUT_MS) == EXIT_SUCCESS)
 	{
@@ -157,7 +157,7 @@ int send_update_pulses(server_con_details_t *details, int event)
 	Returns errno (might also be from sendMsg failing?, or from MsgError)
 */
 // returns EOK on success, otherwise returns the error code. Also reply is filled with the server's response.
-int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
+int send_message(server_con_details_t *details, mh_msg_t *msg, reply_t *reply)
 {
 	// Just in case
 	msg->client_identifier = details->client_identifier;
@@ -190,7 +190,7 @@ int send_message(server_con_details_t *details, msg_t *msg, reply_t *reply)
 	Returns EXIT_FAILURE when TimeTimeout fails.
 	returns 0 (EXIT_SUCESS) if MsgSend was success.
 */ 
-int send_message_timed(server_con_details_t *details, msg_t *msg, reply_t *reply, uint64_t ms_timeout)
+int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *reply, uint64_t ms_timeout)
 {
 	msg->client_identifier = details->client_identifier;
 

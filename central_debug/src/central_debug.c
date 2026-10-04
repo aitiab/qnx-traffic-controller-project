@@ -2,8 +2,9 @@
  * central_debug.c - debug stand-in for the central controller.
  *
  * Attaches as "central_controller" and prints every pulse and message it
- * receives from train controllers. Pulses arrive with code = the train's
- * client_identifier and value = from_state + to_state * 10.
+ * receives from the train and crossing controllers. Pulses arrive with
+ * code = the sender's client_identifier and value = from_state + to_state * 10,
+ * decoded with that sender's state names.
  *
  * Console commands (type while running):
  *   ok          reply EOK with no data to messages (default)
@@ -42,13 +43,24 @@ enum { REPLY_OK = 0, REPLY_ERR, REPLY_ECHO };
 static atomic_int reply_mode  = REPLY_OK;
 static atomic_int reply_errno = EINVAL;
 
+/* Pulse codes (client identifiers) used when reporting to central.
+   Must match TRAIN_CONTROLLER_CLIENT_ID / CROSSING_CONTROLLER_CLIENT_ID in the controllers' message_controller.h */
+#define TRAIN_CENTRAL_ID     (_PULSE_CODE_MINAVAIL + 51)
+#define CROSSING_CENTRAL_ID  (_PULSE_CODE_MINAVAIL + 50)
+
 /* Must match state_t in the train controller */
-static const char *state_names[] = {
-    "NORMAL", "SYSTEM_FAILURE", "APPROACHING_CROSSING",
-    "EMERGENCY_BEFORE_CROSSING", "CROSSING",
-    "EMERGENCY_AT_CROSSING"
+static const char *train_state_names[] = {
+    "NORMAL", "SYSTEM_FAILURE", "APPROACHING_CROSSING", "CROSSING"
 };
-#define NUM_STATES ((int)(sizeof(state_names) / sizeof(state_names[0])))
+
+/* Must match state_t in the crossing controller */
+static const char *crossing_state_names[] = {
+    "IDLE", "TRAIN_APPROACHING", "WARNING_ACTIVE", "GATES_LOWERING",
+    "GATES_DOWN", "TRAIN_CROSSING", "TRAIN_CLEAR_WAIT", "GATES_RAISING",
+    "X1_CLEAR", "X1_FAULT"
+};
+
+#define COUNT_OF(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 static void timestamp(void)
 {
@@ -76,16 +88,37 @@ static void hex_dump(const uint8_t *data, size_t len)
     printf("\n");
 }
 
-static void print_state_update(int value)
+/* value = from_state + to_state * 10, decoded with the sender's state names */
+static void print_state_update(int code, int value)
 {
+    const char **names;
+    int num_states;
+    const char *sender;
+
+    switch (code) {
+    case TRAIN_CENTRAL_ID:
+        names = train_state_names;
+        num_states = COUNT_OF(train_state_names);
+        sender = "train";
+        break;
+    case CROSSING_CENTRAL_ID:
+        names = crossing_state_names;
+        num_states = COUNT_OF(crossing_state_names);
+        sender = "crossing";
+        break;
+    default:
+        printf("    (unknown sender, value not decoded)\n");
+        return;
+    }
+
     int from = value % 10;
     int to   = value / 10;
 
-    if (value >= 0 && from < NUM_STATES && to < NUM_STATES)
-        printf("    state update: (%d) %s -> (%d) %s\n",
-               from, state_names[from], to, state_names[to]);
+    if (value >= 0 && from < num_states && to < num_states)
+        printf("    %s state update: (%d) %s -> (%d) %s\n",
+               sender, from, names[from], to, names[to]);
     else
-        printf("    (value doesn't decode as a state update)\n");
+        printf("    (%s value doesn't decode as a state update)\n", sender);
 }
 
 static void *console(void *arg)
@@ -166,11 +199,11 @@ int main(void)
                        msg.pulse.value.sival_int);
                 break;
             default:
-                /* Train sends pulse code = client_identifier, value = state update */
+                /* Train/crossing send pulse code = client_identifier, value = state update */
                 printf("PULSE from client %d: value=%d (scoid %d)\n",
                        msg.pulse.code, msg.pulse.value.sival_int,
                        msg.pulse.scoid);
-                print_state_update(msg.pulse.value.sival_int);
+                print_state_update(msg.pulse.code, msg.pulse.value.sival_int);
                 break;
             }
             continue;

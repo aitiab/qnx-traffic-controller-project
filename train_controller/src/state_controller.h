@@ -4,7 +4,7 @@
 #include "message_handling.h"
 
 // --------------------------- START Train States Definition ------------------------------- //
-typedef enum {NRML = 0, SYS_FAIL, APRCH, EM_B_CROSS, CROSS, EM_A_CROSS} state_t;
+typedef enum {NRML = 0, SYS_FAIL, APRCH, CROSS} state_t;
 extern const char *state_to_string[];
 
 extern state_t cur_state;
@@ -15,8 +15,16 @@ extern state_t next_state;
 typedef enum {DEFAULT = 0, APRCHNG, EMERG, CROSSNG, PAST, FIXED, CRITICAL_FAILURE} events_t;
 // --------------------------- END Events Definition ------------------------------- //
 
-#define MS_NOTIFY_APPROACH 500 
+// Timeouts (ms) for notifications to the crossing server
+// MS_NOTIFY_APPROACH covers the longest held reply: APPROACH_NOTIFY is only replied once the crossing's gates are down
+// (warning delay + gate lowering), so must be well above the crossing's WARNING delay
+// CROSSING/EXIT are replied to straight away
+#define MS_NOTIFY_APPROACH 5000
+#define MS_NOTIFY_CROSSING 1000
+#define MS_NOTIFY_EXIT     1000
+// FAULT_NOTIFY is replied to straight away. Kept short so the train reaches SYS_FAIL quickly even if the crossing is unresponsive
+#define MS_NOTIFY_FAULT 1000
 
-int state_transitioner(events_t *ev);
+int state_transitioner(events_t *ev, server_con_details_t *crossing_details);
 
 #endif /* SRC_STATE_CONTROLLER_H_ */
