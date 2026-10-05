@@ -47,7 +47,7 @@ int main(void) {
 	rc = pthread_create(&central_messenger_tid, NULL, subserver_central_messenger, NULL);
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for subserver_central_messenger: %s\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for subserver_central_messenger: %s\n", strerror(rc));
 		// Fail silently
 	}
 
@@ -57,7 +57,7 @@ int main(void) {
 	rc = pthread_create(&crossing_server_tid, NULL, server_crossing_controller, (void *)(&_d));
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for server_crossing_controller: %s\nMoving to X1_FAULT.\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for server_crossing_controller: %s\nMoving to X1_FAULT.\n", strerror(rc));
 		master_move_to_X1_FAULT();
 		return EXIT_FAILURE; // ?? or a infinite loop
 	}
@@ -66,7 +66,7 @@ int main(void) {
 	while (sem_wait(&server_established_indicator) == -1 && errno == EINTR);
 	if (crossing_server_details.status == STATUS_FAILED)
 	{
-		printf("[Error] Crossing Server failed to establish, moving state to X1_FAULT\n");
+		printf("[Main: Error] Crossing Server failed to establish, moving state to X1_FAULT\n");
 		pthread_join(crossing_server_tid, &crossing_server_status);
 		master_move_to_X1_FAULT();
 		return EXIT_FAILURE;
@@ -78,7 +78,7 @@ int main(void) {
 		if (rc != EXIT_SUCCESS)
 		{
 			// Without self wake pulses, APPROACH_NOTIFY reqs cant progress past RUNNING_S2, so treat as fatal
-			printf("[Error] Failed to connect to own crossing server: %s\nMoving to X1_FAULT.\n", strerror(rc));
+			printf("[Main: Error] Failed to connect to own crossing server: %s\nMoving to X1_FAULT.\n", strerror(rc));
 			master_move_to_X1_FAULT();
 			return EXIT_FAILURE;
 		}
@@ -89,7 +89,7 @@ int main(void) {
 	rc = pthread_create(&state_transitioner_tid, NULL, state_transitioner, (void *)(&ev));
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for state_transitioner: %s\nExiting with FAIL\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for state_transitioner: %s\nExiting with FAIL\n", strerror(rc));
 		//pthread_join()
 		master_move_to_X1_FAULT();
 		return EXIT_FAILURE;

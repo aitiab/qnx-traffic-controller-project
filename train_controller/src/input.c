@@ -22,7 +22,8 @@ input_t input_obj = {
 };
 
 
-// Cleanup handler: releases the mutex if the thread is cancelled inside pthread_cond_wait
+// Pushed inside the thread cleanup handler
+// so when caleld it releases the mutex if the thread
 static void unlock_input_mutex(void *arg)
 {
 	pthread_mutex_unlock(&(input_obj.mutex));
@@ -62,7 +63,7 @@ void readInput(events_t *ev)
 	}
 	else
 	{
-		printf("[Warning] Failed to get mutex for readInput. Returning DEFAULT event\n");
+		printf("[IO: Error] Failed to get mutex for readInput. Returning CRITICAL_FAILURE event\n");
 		/* CRITICAL_FAILURE or default? CRITICAL_FAILURE is more safe since loss of input means train doesnt
 		 know what to do.
 		 
@@ -119,7 +120,7 @@ void *train_sense_system(void *arg)
 			}
 			else
 			{
-				printf("[Warning] Unknown command: %s\n", line);
+				printf("[IO: Warning] Unknown command: %s\n", line);
 				continue;
 			}
 
@@ -143,12 +144,12 @@ void *train_sense_system(void *arg)
 			}
 			else
 			{
-				printf("[Warning] Failed to get mutex for adding event to input_obj. The event is dropped\n");
+				printf("[IO: Warning] Failed to get mutex for adding event to input_obj. The event is dropped\n");
 			}
 
 			if (success_flag == -1)
 			{
-				printf("[Warning] input_obj buffer is full. The new event is dropped\n");
+				printf("[IO: Warning] input_obj buffer is full. The new event is dropped\n");
 			}
 
 		}
@@ -181,8 +182,8 @@ void *train_sense_system(void *arg)
 				pthread_mutex_unlock(&input_obj.mutex);
 			}
 
-			printf("[Error]: fgets() returned NULL. Error is: %s\n", strerror(errno));
-			printf("Fatal error stopping reading stdin in train_sense_system.\n");
+			printf("[IO: Error] fgets() returned NULL. Error is: %s\n", strerror(errno));
+			printf("[IO: Error] Fatal error, stopped reading stdin in train_sense_system.\n");
 			return (void *)EXIT_FAILURE;
 		}
 	}

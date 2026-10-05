@@ -38,7 +38,7 @@ void *child_train_controller(void *arg)
 
 	if (establish_connection(&crossing_con_details) != EXIT_SUCCESS)
 	{
-		printf("[Error] Failed to connect to the crossing server. Moving state to SYS_FAIL.\n");
+		printf("[Main: Error] Failed to connect to the crossing server. Moving state to SYS_FAIL.\n");
 		events_t ev = CRITICAL_FAILURE;
 		int message = state_transitioner(&ev, &crossing_con_details);
 		cur_state = next_state;
@@ -50,7 +50,7 @@ void *child_train_controller(void *arg)
 	reply_t admit_reply = {0};
 	if(send_admit_message(&crossing_con_details, ADMITTER_CODE, &admit_reply) != EXIT_SUCCESS)
 	{
-		printf("[Error] Failed to gain admission to the crossing server. Moving state to SYS_FAIL.\n");
+		printf("[Main: Error] Failed to gain admission to the crossing server. Moving state to SYS_FAIL.\n");
 		events_t ev = CRITICAL_FAILURE;
 		int message = state_transitioner(&ev, &crossing_con_details);
 		cur_state = next_state;
@@ -85,7 +85,7 @@ void *child_train_controller(void *arg)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
 			break;
 		default:
-			printf("[Warning] Train controller is on an undefined state %d. Changing state back to NRML.\n", cur_state);
+			printf("[Main: Warning] Train controller is on an undefined state %d. Changing state back to NRML.\n", cur_state);
 			next_state = NRML;
 		}
 
@@ -109,7 +109,7 @@ int main(void) {
 	rc = pthread_create(&central_massenger_tid, NULL, subserver_central_messenger, NULL);
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for subserver_central_messenger: %s\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for subserver_central_messenger: %s\n", strerror(rc));
 		// Fail silently
 	}
 
@@ -119,7 +119,7 @@ int main(void) {
 	rc = pthread_create(&child_train_controller_tid, NULL, child_train_controller, NULL);
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for state machine: %s\nExiting with FAIL\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for state machine: %s\nExiting with FAIL\n", strerror(rc));
 		cur_state = SYS_FAIL;
 		child_train_controller_status = (void *)EXIT_FAILURE;
 
@@ -133,7 +133,7 @@ int main(void) {
 	rc = pthread_create(&train_sense_system_tid, NULL, train_sense_system, NULL);
 	if (rc != EOK)
 	{
-		printf("[Error] Failed to create thread for terminal input reader: %s\n", strerror(rc));
+		printf("[Main: Error] Failed to create thread for terminal input reader: %s\n", strerror(rc));
 		train_sense_status = (void *)EXIT_FAILURE; // redundant but for clarity
 	}
 
@@ -153,7 +153,7 @@ int main(void) {
 		// then stop the state machine, set state to SYS_FAIL and exit loop.
 		if (rc == EOK || (rc != ETIMEDOUT && rc != EINVAL))
 		{
-			printf("[System] Pthread_timedjoin on train_sense_system returned %d.\nWill terminate state machine thread.\n", rc);
+			printf("[Main: Warning] pthread_timedjoin on train_sense_system returned %d.\nWill terminate state machine thread.\n", rc);
 			thread_exited = 1; // indicate train_sense_system exited and before state machine
 		}
 		else 
@@ -163,7 +163,7 @@ int main(void) {
 			rc = pthread_timedjoin(child_train_controller_tid, &child_train_controller_status, &deadline);
 			if (rc == EOK || (rc != ETIMEDOUT && rc != EINVAL))
 			{	
-				printf("[System] Pthread_timedjoin on state machine returned %d.\nWill terminate train_sense_system thread.\n", rc);
+				printf("[Main: Warning] pthread_timedjoin on state machine returned %d.\nWill terminate train_sense_system thread.\n", rc);
 				thread_exited = 2; // indicate state machine exited and before train_sense_system
 			}	 
 		}

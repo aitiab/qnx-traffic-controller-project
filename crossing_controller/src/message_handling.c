@@ -37,10 +37,10 @@ int establish_connection(server_con_details_t *details)
 	{
 		name_close(details->coid);
 		details->established = 0;
-		printf("[MH: System] Old connection closed. Will establish new connection\n");
+		printf("[MH: Info] Old connection closed. Will establish new connection\n");
 	}
 
-	printf("[MH: System] Trying to connect to server named: %s\n", details->sname);
+	printf("[MH: Info] Trying to connect to server named: %s\n", details->sname);
 
 	if ((details->coid = name_open(details->sname, 0)) == -1)
 	{
@@ -50,7 +50,7 @@ int establish_connection(server_con_details_t *details)
 	else
 	{
 		details->established = 1;
-		printf("[MH: System] Connection established to: %s\n", details->sname);
+		printf("[MH: Info] Connection established to: %s\n", details->sname);
 		return EXIT_SUCCESS;
 	}
 }
@@ -70,7 +70,7 @@ int send_admit_message(server_con_details_t *details, int SERVER_ADMITTANCE_CODE
 	// Since we expected just a EOK to be sent in the reply to indicate admittance, checking EOK only is good.
 	if (send_message_timed(details, &msg, reply, SEND_ADMIT_TIMEOUT_MS) == EXIT_SUCCESS)
 	{
-		printf("[MH: System] Admittance to the server %s succeeded.\n", details->sname);
+		printf("[MH: Info] Admittance to the server %s succeeded.\n", details->sname);
 		return EXIT_SUCCESS;
 	}
 	else
@@ -93,7 +93,7 @@ int establish_server(server_create_details_t *details)
 	else
 	{
 		details->established = 1;
-		printf("[MH: System] Server established with name: %s\n", details->name);
+		printf("[MH: Info] Server established with name: %s\n", details->name);
 		return EXIT_SUCCESS;
 	}
 }
@@ -112,7 +112,7 @@ int cleanup_server(server_create_details_t *details)
 		else
 		{
 			details->established = 0;
-			printf("[MH: System] Detached server with name: %s\n", details->name);
+			printf("[MH: Info] Detached server with name: %s\n", details->name);
 		}
 	}
 
@@ -140,7 +140,7 @@ int send_update_pulses(server_con_details_t *details, int event)
 	}
 	else
 	{
-		printf("[MH: System] Successfully sent (CID: %d, E: %d) pulse to \"%s\"\n", details->client_identifier, event, details->sname);
+		printf("[MH: Info] Successfully sent (CID: %d, E: %d) pulse to \"%s\"\n", details->client_identifier, event, details->sname);
 		return err;
 	}
 	
@@ -176,7 +176,7 @@ int send_message(server_con_details_t *details, mh_msg_t *msg, reply_t *reply)
 	}
 	else
 	{
-		printf("[MH: System] Successfully sent message to \"%s\"\n", details->sname);
+		printf("[MH: Info] Successfully sent message to \"%s\"\n", details->sname);
 		return EOK;	
 	}
 }
@@ -225,7 +225,7 @@ int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *re
 		}
 		else
 		{
-			printf("[MH: System] Successfully sent timed message to \"%s\"...\n", details->sname);
+			printf("[MH: Info] Successfully sent timed message to \"%s\"...\n", details->sname);
 			return EXIT_SUCCESS;
 		}
 	}
@@ -250,7 +250,7 @@ int cleanup_connection(server_con_details_t *details)
 		else
 		{
 			details->established = 0;
-			printf("[MH: System] Closed coid (%d) on ""%s""\n", details->coid, details->sname);
+			printf("[MH: Info] Closed coid (%d) on ""%s""\n", details->coid, details->sname);
 		}
 	}
 
@@ -307,14 +307,14 @@ client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int sco
 		// feels like im taking this func out of scope too much. its become a everything func... so for nothing
 		if (update_if_exists == CLIENT_UPDATE_IF_EXISTS && entry->client_id != client_id)
 		{
-			printf("[MH: System] Client (CID: %d) already exists in dict, updating client details... removing all reqs...\n", entry->client_id);
+			printf("[MH: Info] Client (CID: %d) already exists in dict, updating client details... removing all reqs...\n", entry->client_id);
 			close_all_reqs(entry);
 			client_details_init(entry, scoid, client_id);
 			r.rt = CLIENT_KEPT_UPDATED;
 		}
 		else
 		{
-			printf("[MH: System] Client (CID: %d) already exists in dict. Returning existing client details...\n", entry->client_id);
+			printf("[MH: Info] Client (CID: %d) already exists in dict. Returning existing client details...\n", entry->client_id);
 			r.rt = CLIENT_KEPT_RETURNED;
 		}
 
@@ -329,7 +329,7 @@ client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int sco
 		return r;
 	}
 
-	printf("[MH: System] Client (scoid: %d, CID: %d) added to client dict.\n", scoid, client_id);
+	printf("[MH: Info] Client (scoid: %d, CID: %d) added to client dict.\n", scoid, client_id);
 	entry = &dict->entries[dict->count++];
 	client_details_init(entry, scoid, client_id);
 
@@ -347,17 +347,17 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 	client_details_t *entry = client_dict_lookup_scoid(dict, scoid);
 	if (entry == NULL)
 	{
-		printf("[MH: System] Failed to remove client (scoid: %d) as it does not exist in the client dict provided.\n", scoid);
+		printf("[MH: Warning] Failed to remove client (scoid: %d) as it does not exist in the client dict provided.\n", scoid);
 		return EXIT_FAILURE;
 	}
 
 	// close all reqs in the last entry. place it here? or in disconnect_handler?
 	// need to deal with errors
-	printf("[MH: System] Removing all reqs for client (scoid: %d)...\n", entry->scoid);
+	printf("[MH: Info] Removing all reqs for client (scoid: %d)...\n", entry->scoid);
 	close_all_reqs(entry);
 	if (detach == CLIENT_DETACH)
 	{
-		printf("[MH: System] Detaching client (scoid: %d)...\n", entry->scoid);
+		printf("[MH: Info] Detaching client (scoid: %d)...\n", entry->scoid);
 		if (ConnectDetach(entry->scoid) == -1)
 		{
 			printf("[MH: Warning] Failed to detach client (scoid: %d)... Error is %s\n", entry->scoid, strerror(errno));
@@ -365,10 +365,10 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 	}
 	else
 	{
-		printf("[MH: System] Reqs removed, but client (scoid: %d) not detached\n", entry->scoid);
+		printf("[MH: Info] Reqs removed, but client (scoid: %d) not detached\n", entry->scoid);
 	}
 	
-	printf("[MH: System] Removing client (scoid: %d) from the provided client dict.\n", entry->scoid);
+	printf("[MH: Info] Removing client (scoid: %d) from the provided client dict.\n", entry->scoid);
 	// replace the entry with the last one in the dict. so now last entry can be replaced.
 	*entry = dict->entries[--dict->count];
 	return EXIT_SUCCESS;

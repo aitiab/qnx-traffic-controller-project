@@ -37,6 +37,7 @@ int state_transition_message(void)
 	// should i be worried about mutexes? what else accesses this?
 	if (cur_state != next_state)
 	{
+		printf("[State] (%d) %s -> (%d) %s\n", cur_state, state_to_string[cur_state], next_state, state_to_string[next_state]);
 		int message = ((cur_state) + (next_state * 10));
 		add_to_log_buffer(&pulses_to_central, (uint32_t)message);
 		return EXIT_SUCCESS;
@@ -48,8 +49,8 @@ int state_transition_message(void)
 	
 }
 
-// Crossing state machine thread. arg is the shared events_t (&ev).
-// Pulses the crossing server (self_con_details) every loop so it re-runs its req processing.
+// Crossing state machine thread. arg is the shared events_t (&ev)
+// Pulses the crossing server (self_con_details) every loop so it reruns its req processing
 void *state_transitioner(void *arg)
 {
 	events_t *ev = (events_t *)arg;
@@ -116,7 +117,7 @@ void *state_transitioner(void *arg)
 						pthread_cond_broadcast(&ev->cond);
 						pthread_mutex_unlock(&ev->mutex);
 					}
-					printf("[Error] Fatal fault encountered when activating flashers. Entering X1_FAULT.\n");
+					printf("[State: Error] Fatal fault encountered when activating flashers. Entering X1_FAULT.\n");
 					next_state = X1_FAULT;
 					// Need to deal with situation i fail to get the mutex lock?
 					// Should i cancel the state_transitioner? with exit_failure???
@@ -135,7 +136,7 @@ void *state_transitioner(void *arg)
 						pthread_mutex_unlock(&ev->mutex);
 						pthread_cond_broadcast(&ev->cond);
 					}
-					printf("[Error] Fatal fault encountered when closing gates. Entering X1_FAULT.\n");
+					printf("[State: Error] Fatal fault encountered when closing gates. Entering X1_FAULT.\n");
 					next_state = X1_FAULT;
 				}
 				break;
@@ -239,16 +240,16 @@ void *state_transitioner(void *arg)
 
 int activate_flashers(void)
 {
-	printf("[System] Flashers activated.\n");
+	printf("[HW] Flashers activated.\n");
 	return EXIT_SUCCESS;
 }
 
 int gates_down(void)
 {
-	printf("[System] Gates down.\n");
+	printf("[HW] Gates down.\n");
 	return EXIT_SUCCESS;
 }
 void gates_up(void)
 {
-	printf("[System] Gates up.\n");
+	printf("[HW] Gates up.\n");
 }

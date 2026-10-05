@@ -63,7 +63,7 @@ void *server_crossing_controller(void *arg)
 		crossing_server_details.status = STATUS_FAILED;
 		// Use also as a synchronisation primitive for the crossing_server_details.status. It will also be checked by crossing_controller.c
 		sem_post(sem);
-		printf("[Error] Failed to establish server for the crossing controller...\n\"server_crossing_controller\" thread is exiting.\n");
+		printf("[CrossServer: Error] Failed to establish server for the crossing controller...\n\"server_crossing_controller\" thread is exiting.\n");
 		return (void *)EXIT_FAILURE;
 	}
 
@@ -81,13 +81,13 @@ void *server_crossing_controller(void *arg)
 		if (rcvid == -1)
 		{
 			printf("[CrossServer: Warning] Failed to receive message. Error is %s\n", strerror(errno));
-			//continue;
+			continue;
 		}
 
 		if (rcvid == 0)
 		{
 			// Pulse received
-			printf("[CrossServer: System] Pulse received (scoid: %d, code: %d, value: %d)\n", recv.pulse.scoid, recv.pulse.code, recv.pulse.value.sival_int);
+			printf("[CrossServer: Info] Pulse received (scoid: %d, code: %d, value: %d)\n", recv.pulse.scoid, recv.pulse.code, recv.pulse.value.sival_int);
 			
 			client_details_t *ct = client_dict_lookup_scoid(&client_dict, recv.pulse.scoid);
 			
@@ -104,7 +104,7 @@ void *server_crossing_controller(void *arg)
 				// Find someway to connect clientID with scoid.
 				// Use value to let client decide cancel/or not?
 				case _PULSE_CODE_DISCONNECT:
-					printf("[CrossServer: System] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
+					printf("[CrossServer: Info] PULSE_CODE_DISCONNECT received from client %d\n", recv.pulse.scoid);
 					// Free any state kept with client
 
 					// If scoid was not found in our established client list (from ADMIT)
@@ -130,7 +130,7 @@ void *server_crossing_controller(void *arg)
 					break;
 				case _PULSE_CODE_UNBLOCK:
 				{
-					printf("[CrossServer: System] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
+					printf("[CrossServer: Info] PULSE_CODE_UNBLOCK received from client %d\n", recv.pulse.scoid);
 					
 					int unblocked_rcvid = recv.pulse.value.sival_int;
 					// just random idek
@@ -157,7 +157,7 @@ void *server_crossing_controller(void *arg)
 					{
 						case SELF_WAKE_PULSE:
 						{
-							printf("[CrossServer: System] Received a wakeup pulse from CROSSING_CONTROLLER\n");
+							//printf("[CrossServer: Info] Received a wakeup pulse from CROSSING_CONTROLLER\n");
 							break;
 						}
 						default:
@@ -179,18 +179,18 @@ void *server_crossing_controller(void *arg)
 		if (rcvid > 0)
 		{
 			// Message received
-			printf("[CrossServer: System] Received message from central controller. Type is %d, Data is %d\n", recv.msg.type, recv.msg.data);
-			
+			printf("[CrossServer: Info] Received message (scoid: %d, type: %d, data: %d)\n", info.scoid, recv.msg.type, recv.msg.data);
+
 			if (recv.msg.type == _IO_CONNECT)
 			{
 				MsgReply(rcvid, EOK, NULL, 0);
-				printf("\n[CrossServer: System] Server recieved _IO_CONNECT message and replyed with EOK\n");
+				printf("[CrossServer: Info] Received _IO_CONNECT message, replied with EOK\n");
 				continue;
 			}
 			else if (recv.msg.type > _IO_BASE && recv.msg.type <= _IO_MAX)
 			{
 				MsgError(rcvid, ENOSYS);
-				printf("\n[CrossServer: System] Server recieved IO message and rejected it (ENOSYS)\n");
+				printf("[CrossServer: Warning] Received IO message, rejected it (ENOSYS)\n");
 				continue;
 			}
 			// need to add my own admitter. (separate form the IO_CONNECT>)
@@ -201,11 +201,11 @@ void *server_crossing_controller(void *arg)
 				if (r.ct == NULL)
 				{
 					MsgError(rcvid, EBUSY); // client_dict is full. reject connection
-					printf("\n[CrossServer: System] Server recieved ADMITTER message but client dict was full... replyed with EBUSY\n");
+					printf("[CrossServer: Warning] Received ADMITTER message but client dict was full... replied with EBUSY\n");
 					continue; // ?
 				}
 				MsgReply(rcvid, EOK, NULL, 0);
-				printf("\n[CrossServer: System] Server recieved ADMITTER message and replyed with EOK\n");
+				printf("[CrossServer: Info] Received ADMITTER message, replied with EOK\n");
 				continue;
 			}
 			else
@@ -247,8 +247,12 @@ static void _reply_req_fail(client_details_t *ct, int rcvid)
 	reqs_remove(ct, rcvid);
 }
 
-// Steps every pending req forward. A finished req is replied to and removed.
-// Returns the number of reqs replied to.
+/*
+	Processes the requests found in client_details_t of client_dict_t.
+	A finished req is replied to and removed.
+	May reply with a fail or a success depending on... well how i coded it
+	returns number of reqs replied too... not sure if helpful..
+*/
 static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 {
 	int replied = 0;
@@ -260,7 +264,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 		{
 			case TRAIN_CONTROLLER_CLIENT_ID:
 			{
-				// while, not for -> removing a req moves the last req into slot j, so j only advances if nothing was removed
+				// removing a req, moves the last req in the array into the same 
+				// position, so need to process the same position of array again
 				uint8_t j = 0;
 				while (j < reqs->count)
 				{
@@ -434,7 +439,7 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 	if (ct == NULL)
 	{
 		// Maybe should send something in the reply? Some data and not just a error?
-		printf("[CrossServer: Warning] Client's details could not be found in the. Returning EINVAL (request invalid, admit first)\n");
+		printf("[CrossServer: Warning] Client's details could not be found in the client dict. Returning EINVAL (request invalid, admit first)\n");
 		MsgError(rcvid, EINVAL);
 		// If not found in the list, then ignore this rcvid
 		return EXIT_SUCCESS; // ???
@@ -466,7 +471,7 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 				printf("[CrossServer: Warning] Train sent request (type %d) but the request buffer was full. Returned EAGAIN.\n", recv->msg.type);
 			}
 			else
-				printf("[CrossServer: System] Train sent request (type %d), request saved.\n", recv->msg.type);
+				printf("[CrossServer: Info] Train sent request (type %d), request saved.\n", recv->msg.type);
 		
 			return EXIT_SUCCESS;
 		}
@@ -533,7 +538,7 @@ void *subserver_central_messenger(void *arg)
 	if (rc != EXIT_SUCCESS)
 	{
 		central_con_details.status = STATUS_FAILED;
-		printf("[Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");
+		printf("[Central: Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");
 		return (void *)EXIT_FAILURE;
 	}
 
@@ -558,7 +563,7 @@ void *subserver_central_messenger(void *arg)
 		}
 		else
 		{
-			printf("[Warning] Failed to get pulses from pulses_to_central buffer due to mutex lock: %s\n", strerror(rc));
+			printf("[Central: Warning] Failed to get pulses from pulses_to_central buffer due to mutex lock: %s\n", strerror(rc));
 		}
 
 		if (event_given)
@@ -568,13 +573,13 @@ void *subserver_central_messenger(void *arg)
 			{
 				if (rc == EAGAIN)
 				{
-					printf("[Warning] Central controller's kernel had insufficient resources to enqueue pulse.\nThe update message is lost");
+					printf("[Central: Warning] Central controller's kernel had insufficient resources to enqueue pulse.\nThe update message is lost\n");
 					should_sleep = 1;
 				}
 				else
 				{
 					central_con_details.status = STATUS_FAILED;
-					printf("[Error] send_update_pulses failed. The central controller messenger thread is exiting.\n");
+					printf("[Central: Error] send_update_pulses failed. The central controller messenger thread is exiting.\n");
 					return (void *)EXIT_FAILURE;
 				}
 			}

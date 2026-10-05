@@ -15,9 +15,10 @@ extern state_t next_state;
 typedef enum {DEFAULT = 0, APRCHNG, EMERG, CROSSNG, PAST, FIXED, CRITICAL_FAILURE} events_t;
 // --------------------------- END Events Definition ------------------------------- //
 
-// Timeouts (ms) for notifications to the crossing server
-// MS_NOTIFY_APPROACH covers the longest held reply: APPROACH_NOTIFY is only replied once the crossing's gates are down
-// (warning delay + gate lowering), so must be well above the crossing's WARNING delay
+// Miliseconds Timeouts for notifications to the crossing server. Adjust as needed
+// MS_NOTIFY_APPROACH should cover how long a approch reply can take
+// Crossing only replies to APPROACH_NOTIFY once the crossing's gates are down
+// so must consider time to relay message to crossing servers' processing delays, intersections replys + gate lowering),
 // CROSSING/EXIT are replied to straight away
 #define MS_NOTIFY_APPROACH 5000
 #define MS_NOTIFY_CROSSING 1000

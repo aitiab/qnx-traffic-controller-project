@@ -44,7 +44,7 @@ void *subserver_central_messenger(void *arg)
 	if (rc != EXIT_SUCCESS)
 	{
 		central_con_details.status = STATUS_FAILED;
-		printf("[Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");
+		printf("[Central: Error] Failed to connect to the central controller.\nsubserver_central_messager thread is exiting\n");
 		return (void *)EXIT_FAILURE;
 	}
 
@@ -69,7 +69,7 @@ void *subserver_central_messenger(void *arg)
 		}
 		else
 		{
-			printf("[Warning] Failed to get pulses from pulses_to_central buffer due to mutex lock: %s\n", strerror(rc));
+			printf("[Central: Warning] Failed to get pulses from pulses_to_central buffer due to mutex lock: %s\n", strerror(rc));
 		}
 
 		if (event_given)
@@ -79,13 +79,13 @@ void *subserver_central_messenger(void *arg)
 			{
 				if (rc == EAGAIN)
 				{
-					printf("[Warning] Central controller's kernel had insufficient resources to enqueue pulse.\nThe update message is lost");
+					printf("[Central: Warning] Central controller's kernel had insufficient resources to enqueue pulse.\nThe update message is lost\n");
 					should_sleep = 1;
 				}
 				else
 				{
 					central_con_details.status = STATUS_FAILED;
-					printf("[Error] send_update_pulses failed. The central controller messenger thread is exiting.\n");
+					printf("[Central: Error] send_update_pulses failed. The central controller messenger thread is exiting.\n");
 					return (void *)EXIT_FAILURE;
 				}
 			}
