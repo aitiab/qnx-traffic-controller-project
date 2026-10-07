@@ -49,6 +49,14 @@ int state_transition_message(void)
 	
 }
 
+// Pushed inside the thread cleanup handler
+// so when caleld it releases the mutex if the thread
+static void unlock_input_mutex(void *arg)
+{
+	events_t *ev = (events_t *)arg;
+	pthread_mutex_unlock(&ev->mutex);
+}
+
 // Crossing state machine thread. arg is the shared events_t (&ev)
 // Pulses the crossing server (self_con_details) every loop so it reruns its req processing
 void *state_transitioner(void *arg)
@@ -57,6 +65,11 @@ void *state_transitioner(void *arg)
 
 	while(1)
 	{
+		/*  turn on cancel here so if crossing dies... it can cancel during pulses or waiting
+			for cond_signal from the dead crossing server
+			it is unlikely (since no a cancellation point there) to cancel whilst states are being changed.
+		*/  
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 		// need to set the event code appropriately. Should I deal with errors for send_update_pulses?
 		send_update_pulses(&self_con_details, SELF_WAKE_PULSE);
 		switch (cur_state)
@@ -66,6 +79,7 @@ void *state_transitioner(void *arg)
 				// Wait until train_approaching
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
 					while (ev->events[EV_TRAIN_APPROACH] == 0 && ev->events[EV_X1_FAULT] == 0)
 						pthread_cond_wait(&ev->cond, &ev->mutex);
 
@@ -80,7 +94,8 @@ void *state_transitioner(void *arg)
 						// Reset the event indicator? now or later?
 						ev->events[EV_TRAIN_APPROACH] = 0;
 					}
-					pthread_mutex_unlock(&ev->mutex);
+					//pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
 				}
 				break;
 			}
@@ -92,6 +107,7 @@ void *state_transitioner(void *arg)
 				// Then you active your warnings as well (flashers)
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
 					while (ev->events[EV_WARNINGS_ACTIVE] == 0 && ev->events[EV_X1_FAULT] == 0)
 						pthread_cond_wait(&ev->cond, &ev->mutex);
 					if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
@@ -103,7 +119,8 @@ void *state_transitioner(void *arg)
 						next_state = WARNING_ACTIVE;
 						ev->events[EV_WARNINGS_ACTIVE] = 0;
 					}
-					pthread_mutex_unlock(&ev->mutex);
+					//pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
 				}
 				
 				// If while activating flashers a critical failure happened set the EV_X1_FAULT event and go to X1_FAULT state
@@ -133,8 +150,8 @@ void *state_transitioner(void *arg)
 					if (pthread_mutex_lock(&ev->mutex) == EOK)
 					{
 						ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
-						pthread_mutex_unlock(&ev->mutex);
 						pthread_cond_broadcast(&ev->cond);
+						pthread_mutex_unlock(&ev->mutex);
 					}
 					printf("[State: Error] Fatal fault encountered when closing gates. Entering X1_FAULT.\n");
 					next_state = X1_FAULT;
@@ -156,6 +173,7 @@ void *state_transitioner(void *arg)
 			{
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
 					while (ev->events[EV_TRAIN_CROSSING] == 0 && ev->events[EV_X1_FAULT] == 0)
 						pthread_cond_wait(&ev->cond, &ev->mutex);
 					if (ev->events[EV_X1_FAULT])
@@ -167,7 +185,8 @@ void *state_transitioner(void *arg)
 						next_state = TRAIN_CROSSING;
 						ev->events[EV_TRAIN_CROSSING] = 0;
 					}
-					pthread_mutex_unlock(&ev->mutex);
+					//pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
 				}
 				// Some message
 				break;
@@ -176,6 +195,7 @@ void *state_transitioner(void *arg)
 			{
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
 					while (ev->events[EV_TRAIN_EXIT] == 0 && ev->events[EV_X1_FAULT] == 0)
 						pthread_cond_wait(&ev->cond, &ev->mutex);
 					if (ev->events[EV_X1_FAULT])
@@ -187,7 +207,8 @@ void *state_transitioner(void *arg)
 						next_state = TRAIN_CLEAR_WAIT;
 						ev->events[EV_TRAIN_EXIT] = 0;
 					}
-					pthread_mutex_unlock(&ev->mutex);
+					//pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
 				}
 
 				break;
@@ -230,6 +251,7 @@ void *state_transitioner(void *arg)
 			}
 		}
 
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 		// send message to the central controller
 		state_transition_message();
 		cur_state = next_state;

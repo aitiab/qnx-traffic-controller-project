@@ -182,6 +182,9 @@ int main(void) {
 		// or EXIT_FAILURE if it exited on its own (reached SYS_FAIL)
 		pthread_join(child_train_controller_tid, &child_train_controller_status); 
 
+		// cooked below... badd badd badd
+		// there is no train_sense_system that returns an EXIT_SUCCESS atm...
+		// so werid. but i guess forward thinking
 		// if train_sense_system failed then closed (status = EXIT_FAILURE), or thread failed to join (status = NULL)
 		// then place train in SYS_FAIL state.
 		if (((intptr_t)train_sense_status == EXIT_FAILURE || train_sense_status == NULL) && cur_state != SYS_FAIL)

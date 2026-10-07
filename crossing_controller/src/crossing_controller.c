@@ -109,8 +109,9 @@ int main(void) {
 	/*
 	In the event that the crossing server does crash...
 	The state_transitioner should be cancelled
-	Since cancellation only occurs in cancellation points (i.e. the wait or mutex_lock)
+	Since cancellation only occurs in cancellation points (i.e. the cond_wait)
 	Only need to worry about turning off cancel when doing updates to the central
+	Also must ensure it doesn't die whilst holding a mutex (the crossing server)
 	
 	Yet another issue... central crashing... holding the mutex, and blocking the state_transitioner.
 	but central gets messages from log as sync... lock and unlock?... central only?? crashes on send_pulses
@@ -119,10 +120,31 @@ int main(void) {
 
 	just remember to cancel the cancellation around that event.
 	add the cancellation handlders to the state_tranisitioner switch case...
-	*/
-	pthread_join(crossing_server_tid, &crossing_server_status);
 
+	always safer to
+	ensure (assert) the system is in the X1_FAULT state and safe
+	*/
+	rc = pthread_join(crossing_server_tid, &crossing_server_status);
+	
+	// If the pthread joined successfully or some error other than those indicating
+	// the thread is detached (EINVAL) or pthread_join timed out (ETIMEDOUT)
+	// then cancel 
+	if (rc == EOK || (rc != ETIMEDOUT && rc != EINVAL))
+	{
+		printf("[Main: CRITICAL] Crossing server closed. Now closing state_transitioner.\n");
+		pthread_cancel(state_transitioner_tid);
+		pthread_join(state_transitioner_tid, &state_transitioner_status);
+		printf("[Main: CRITICAL] Crossing server and state transitioner closed.\n");
+		master_move_to_X1_FAULT();
+		return (void *)EXIT_FAILURE; //to who? idk?
+	}
+	
+	// Maybe one should deal with the situation where state_transitioner crashes first
+	// of course in such an event master_move_to_x1_fault should occur after...
+	// could do the same timedjoin... but thats iffy... idk
+	// atm except things really sus happens, it is unlikely to crashy??
 	pthread_join(state_transitioner_tid, &state_transitioner_status);
 
-	return ((intptr_t)crossing_server_status == EXIT_FAILURE) ? EXIT_FAILURE : EXIT_SUCCESS;
+	//idk.
+	return EXIT_SUCCESS;
 }
