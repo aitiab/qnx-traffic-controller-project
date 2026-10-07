@@ -136,7 +136,7 @@ int main(void) {
 		pthread_join(state_transitioner_tid, &state_transitioner_status);
 		printf("[Main: CRITICAL] Crossing server and state transitioner closed.\n");
 		master_move_to_X1_FAULT();
-		return (void *)EXIT_FAILURE; //to who? idk?
+		return EXIT_FAILURE; //to who? idk?
 	}
 	
 	// Maybe one should deal with the situation where state_transitioner crashes first

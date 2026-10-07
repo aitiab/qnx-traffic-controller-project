@@ -65,9 +65,10 @@ void *state_transitioner(void *arg)
 
 	while(1)
 	{
-		/*  turn on cancel here so if crossing dies... it can cancel during pulses or waiting
+		/*  turn on cancel here so if crossing dies... it can cancel during pulses or waiting and printf
 			for cond_signal from the dead crossing server
-			it is unlikely (since no a cancellation point there) to cancel whilst states are being changed.
+			it is safe to disable cancel after the wait to stop cancel before like 
+			*_state changes are made. 
 		*/  
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 		// need to set the event code appropriately. Should I deal with errors for send_update_pulses?
@@ -97,6 +98,7 @@ void *state_transitioner(void *arg)
 					//pthread_mutex_unlock(&ev->mutex);
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				break;
 			}
 			case TRAIN_APPROACHING:
@@ -123,6 +125,7 @@ void *state_transitioner(void *arg)
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
 				
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				// If while activating flashers a critical failure happened set the EV_X1_FAULT event and go to X1_FAULT state
 				// setting the fault state will inform the train that a fault has occured.
 				// **Yes both use the same fault event**
@@ -144,6 +147,7 @@ void *state_transitioner(void *arg)
 			case WARNING_ACTIVE:
 			{
 				// ??? delay???
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				next_state = GATES_LOWERING;
 				if (gates_down() != EXIT_SUCCESS)
 				{
@@ -161,6 +165,7 @@ void *state_transitioner(void *arg)
 			case GATES_LOWERING:
 			{
 				// Tells the server's APPROACH_NOTIFY req (RUNNING_S2) that it is safe to reply to the train
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
 					ev->events[EV_GATE_DOWN] = EV_GATE_DOWN_STATE_DOWN;
@@ -188,6 +193,7 @@ void *state_transitioner(void *arg)
 					//pthread_mutex_unlock(&ev->mutex);
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				// Some message
 				break;
 			}
@@ -210,7 +216,7 @@ void *state_transitioner(void *arg)
 					//pthread_mutex_unlock(&ev->mutex);
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
-
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				break;
 			}
 			case TRAIN_CLEAR_WAIT:
@@ -230,6 +236,7 @@ void *state_transitioner(void *arg)
 					}
 					pthread_mutex_unlock(&ev->mutex);
 				}
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				if (next_state == X1_CLEAR)
 					gates_up();
 				break;
@@ -240,6 +247,7 @@ void *state_transitioner(void *arg)
 			case X1_FAULT:
 			{
 				// ???? is this ok. idk. well see
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				activate_flashers();
 				gates_down();
 				return (void *)EXIT_FAILURE;
@@ -251,6 +259,7 @@ void *state_transitioner(void *arg)
 			}
 		}
 
+		// might be redundant but for safety
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 		// send message to the central controller
 		state_transition_message();
