@@ -233,9 +233,49 @@ int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *re
 	{
 		return EXIT_FAILURE;
 	}
-
-
 }
+
+/*
+	Does a safe reply to rcvid
+	Safe here means if there is a fatal error the client_dict is cleared
+	and all client requests are failed (sent MsgError).
+
+	Must check the returned errno for ESRCH and ETIMEDOUT since they are recoverable
+
+	After a fail, can safely cancel/fail the thread
+
+	returns the errno from MsgReply when an error. 
+	returns EOK when successful.
+*/
+int send_safe_reply(client_dict_t *dict, int rcvid, int status, reply_t *reply)
+{
+	size_t size = 0;
+	if (reply != NULL)
+	{
+		size = sizeof(*reply);
+	}
+
+	if (MsgReply(rcvid, status, reply, size) == -1)
+	{
+		if (errno != ESRCH && errno != ETIMEDOUT)
+		{
+			printf("[MH: Error] MsgReply to rcvid %d hit a fatal error.\n", rcvid);
+			client_cleanup_all(dict);
+			return errno;
+		}
+		else
+		{
+			printf("[MH: Error] MsgReply to rcvid %d hit a recoverable error.\n", rcvid);
+			return errno;
+		}
+	}
+	else
+	{
+		printf("[MH: Info] MsgReply to rcvid %d was successfull.\n", rcvid);
+		return EOK;
+	}
+}
+
 
 
 int cleanup_connection(server_con_details_t *details)
@@ -308,7 +348,7 @@ client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int sco
 		if (update_if_exists == CLIENT_UPDATE_IF_EXISTS && entry->client_id != client_id)
 		{
 			printf("[MH: Info] Client (CID: %d) already exists in dict, updating client details... removing all reqs...\n", entry->client_id);
-			close_all_reqs(entry);
+			close_all_reqs(entry, ECANCELED);
 			client_details_init(entry, scoid, client_id);
 			r.rt = CLIENT_KEPT_UPDATED;
 		}
@@ -354,7 +394,7 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 	// close all reqs in the last entry. place it here? or in disconnect_handler?
 	// need to deal with errors
 	printf("[MH: Info] Removing all reqs for client (scoid: %d)...\n", entry->scoid);
-	close_all_reqs(entry);
+	close_all_reqs(entry, ECANCELED);
 	if (detach == CLIENT_DETACH)
 	{
 		printf("[MH: Info] Detaching client (scoid: %d)...\n", entry->scoid);
@@ -374,11 +414,33 @@ int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach)
 	return EXIT_SUCCESS;
 }
 
-// ---------------------- Client requests ----------------------
-// Unblocks the client waiting on rcvid with EAGAIN. Errors are only logged.
-static void fail_req(client_details_t *ct, int rcvid)
+/*
+	Deletes all requests for all clients stored in the provided clients_dict
+	Sends a MsgError with EFAULT to the clients.
+
+	After this no client is waiting for replies... therefore the server can 
+	safely fail and clients on send_block would be released normally by kernel.
+
+	No need to worry about DISCONNECT since it doesn't block the client
+*/
+void client_cleanup_all(client_dict_t *dict)
 {
-	if (MsgError(rcvid, EAGAIN) == -1)
+	for (int i = 0; i < dict->count; i++)
+	{
+		client_details_t *entry = &dict->entries[i];
+		// Send MsgErrors (fail them) to all requests stored for the client
+		// Will unblock any waiting for responses.
+		close_all_reqs(entry, EFAULT); 
+	}
+
+	dict->count = 0;
+}
+
+// ---------------------- Client requests ----------------------
+// Unblocks the client waiting on rcvid with err_code. Errors are only logged.
+static void fail_req(client_details_t *ct, int rcvid, int err_code)
+{
+	if (MsgError(rcvid, err_code) == -1)
 	{
 		if (errno == ESRCH)
 		{
@@ -412,7 +474,7 @@ int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r)
 		{
 			if (reqs->entries[i].replaceable == REQ_REPLACEABLE)
 			{
-				fail_req(ct, reqs->entries[i].rcvid);
+				fail_req(ct, reqs->entries[i].rcvid, EAGAIN);
 				reqs->entries[i] = r;
 
 				// maybe it should say it replaced something? idk
@@ -442,13 +504,13 @@ int reqs_remove(client_details_t *ct, int rcvid)
 }
 
 // closes all reqs for the client and empties its req array. Returns EXIT_SUCCESS on func exit.
-int close_all_reqs(client_details_t *ct)
+int close_all_reqs(client_details_t *ct, int err_code)
 {
 	req_array_t *reqs = &ct->reqs;
 
 	for (uint8_t i = 0; i < reqs->count; i++)
 	{
-		fail_req(ct, reqs->entries[i].rcvid);
+		fail_req(ct, reqs->entries[i].rcvid, err_code);
 
 		// if i have work for that rcvid. i should clean that up too
 	}

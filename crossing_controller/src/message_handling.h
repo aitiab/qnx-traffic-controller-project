@@ -160,12 +160,16 @@ client_dict_add_get_return_t client_dict_get_or_add(client_dict_t *dict, int sco
 #define CLIENT_DETACH 			1
 #define CLIENT_NO_DETACH 		0
 int client_dict_remove(client_dict_t *dict, int scoid, uint8_t detach);
+void client_cleanup_all(client_dict_t *dict);
+
+// Not currently used. Replies to rcvid and, on a fatal reply error, fails every pending req in dict.
+int send_safe_reply(client_dict_t *dict, int rcvid, int status, reply_t *reply);
 
 #define REQ_ADD_REPLACE 		1
 #define REQ_ADD_NOT_REPLACE 	0
 #define REQ_BUFF_FULL 			-1
 int reqs_add(client_details_t *ct, uint8_t replace_existing, req_t r);
-int close_all_reqs(client_details_t *ct);
+int close_all_reqs(client_details_t *ct, int err_code);
 int reqs_remove (client_details_t *ct, int rcvid);
 
 int add_to_log_buffer(log_buffer_t *buff, uint32_t data);

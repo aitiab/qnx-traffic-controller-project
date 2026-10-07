@@ -31,7 +31,9 @@ void master_move_to_X1_FAULT(void)
 	cur_state = next_state;
 	activate_flashers();
 	gates_down();
+
 	// pretty bad...
+	// maybe should periodically sent updates to central controller?
 	while (1)
 		sleep(5);
 }
@@ -64,16 +66,22 @@ int main(void) {
 
 	// Wait until the server has been established before attempting to connect to it
 	while (sem_wait(&server_established_indicator) == -1 && errno == EINTR);
+	// since sem_wait waits for the message_controller to update the status
+	// Checking the status after is safe
 	if (crossing_server_details.status == STATUS_FAILED)
 	{
 		printf("[Main: Error] Crossing Server failed to establish, moving state to X1_FAULT\n");
+		// if status is FAILED, then we dont need to cancel the thread
+		// it should returned with EXIT_FAILURE 
 		pthread_join(crossing_server_tid, &crossing_server_status);
 		master_move_to_X1_FAULT();
-		return EXIT_FAILURE;
+		return EXIT_FAILURE; // guess this is useless
 	}
 	else
 	{
 		// Self connection, used by the state machine to pulse the server so it re-runs its req processing
+		// the func is synchronous. so wait for the return.
+		// shoould there be considerations about timing/how long it takes for name_open to return 
 		rc = establish_connection(&self_con_details);
 		if (rc != EXIT_SUCCESS)
 		{
@@ -83,9 +91,12 @@ int main(void) {
 			return EXIT_FAILURE;
 		}
 		// should i do admittance?
+		// probs not unless im sending messages and elaborate processing of my requests.
 	}
 	
-
+	// Doesnt make sense to remove or cancel crossing or central if state transitioner crashes or fails to open.
+	// since talking to the train and central is still important
+	void *state_transitioner_status = (void *)NULL;
 	rc = pthread_create(&state_transitioner_tid, NULL, state_transitioner, (void *)(&ev));
 	if (rc != EOK)
 	{
@@ -95,8 +106,23 @@ int main(void) {
 		return EXIT_FAILURE;
 	}
 
-	// server_crossing_controller only returns if establish_server failed
+	/*
+	In the event that the crossing server does crash...
+	The state_transitioner should be cancelled
+	Since cancellation only occurs in cancellation points (i.e. the wait or mutex_lock)
+	Only need to worry about turning off cancel when doing updates to the central
+	
+	Yet another issue... central crashing... holding the mutex, and blocking the state_transitioner.
+	but central gets messages from log as sync... lock and unlock?... central only?? crashes on send_pulses
+	therefore by then the mutex is unlocked.
+	so should be fine...
+
+	just remember to cancel the cancellation around that event.
+	add the cancellation handlders to the state_tranisitioner switch case...
+	*/
 	pthread_join(crossing_server_tid, &crossing_server_status);
+
+	pthread_join(state_transitioner_tid, &state_transitioner_status);
 
 	return ((intptr_t)crossing_server_status == EXIT_FAILURE) ? EXIT_FAILURE : EXIT_SUCCESS;
 }

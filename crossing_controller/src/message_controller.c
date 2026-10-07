@@ -46,8 +46,15 @@ static void _unblock_handler(void *data);
 static void client_handler_initaliser(client_details_t *ct);
 static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *info, int rcvid, recv_t *recv);
 static int _my_req_process(client_dict_t *client_dict, events_t *ev);
-static void _reply_req_done(client_details_t *ct, int rcvid);
+static int _reply_req_done(client_details_t *ct, int rcvid, int err_code);
+static int _reply_req_fail(client_details_t *ct, int rcvid, int err_code);
 
+/* 
+* A bit sussy that except inital failure to establish I couldnt find any other fatal failure situations...
+* except the mutex parts.
+* currently failed msgReply are dealt with MsgError where the error status send back essentially carries the same message/indicate to the train
+* i guess the real error (fatal) would be if the reply carried important data rather than simple indicators.
+*/ 
 
 void *server_crossing_controller(void *arg)
 {
@@ -61,7 +68,8 @@ void *server_crossing_controller(void *arg)
 	if (rc != EXIT_SUCCESS)
 	{
 		crossing_server_details.status = STATUS_FAILED;
-		// Use also as a synchronisation primitive for the crossing_server_details.status. It will also be checked by crossing_controller.c
+		// Also be used as a synchronisation primitive for the crossing_server_details.status.
+		// The status will then be checked by crossing_controller.c
 		sem_post(sem);
 		printf("[CrossServer: Error] Failed to establish server for the crossing controller...\n\"server_crossing_controller\" thread is exiting.\n");
 		return (void *)EXIT_FAILURE;
@@ -121,6 +129,16 @@ void *server_crossing_controller(void *arg)
 						// }
 
 						// remove from dict and detach 
+						/* 
+							detach may fail but only on (coid doesnt exist) EINVAL
+							which is fine. client details would be removed anyway
+
+							closing of the reqs is the same.
+							unless a timertimeout is used. 
+							MsgError only has two errors: the waiting thread does not exist (rcvid) or etimedout (from timertimeout)
+
+							if a timertimout is used, need to add further handling
+						*/
 						client_dict_remove(&client_dict, recv.pulse.scoid, CLIENT_DETACH);
 					}
 					else
@@ -136,6 +154,7 @@ void *server_crossing_controller(void *arg)
 					// just random idek
 					if (ct != NULL)
 					{
+						// the unblock handler (see function down belowwww), it removes the req from the client's list
 						ct_d.data = &unblocked_rcvid;
 						if (ct->unblock_handler != NULL)
 						{
@@ -183,7 +202,12 @@ void *server_crossing_controller(void *arg)
 
 			if (recv.msg.type == _IO_CONNECT)
 			{
-				MsgReply(rcvid, EOK, NULL, 0);
+				if (MsgReply(rcvid, EOK, NULL, 0) == -1)
+				{
+					printf("[CrossServer: Warning] Failed to reply to _IO_CONNECT (rcvid %d): %s. Sending MsgError(EAGAIN)\n", rcvid, strerror(errno));
+					MsgError(rcvid, EAGAIN);
+					continue;
+				}
 				printf("[CrossServer: Info] Received _IO_CONNECT message, replied with EOK\n");
 				continue;
 			}
@@ -204,7 +228,12 @@ void *server_crossing_controller(void *arg)
 					printf("[CrossServer: Warning] Received ADMITTER message but client dict was full... replied with EBUSY\n");
 					continue; // ?
 				}
-				MsgReply(rcvid, EOK, NULL, 0);
+				if (MsgReply(rcvid, EOK, NULL, 0) == -1)
+				{
+					printf("[CrossServer: Warning] Failed to reply to ADMITTER (rcvid %d): %s. Sending MsgError(EAGAIN)\n", rcvid, strerror(errno));
+					MsgError(rcvid, EAGAIN);
+					continue;
+				}
 				printf("[CrossServer: Info] Received ADMITTER message, replied with EOK\n");
 				continue;
 			}
@@ -225,37 +254,54 @@ void *server_crossing_controller(void *arg)
 }
 
 
-// Replies EOK to the train for a finished req, then removes it from the client's reqs
-static void _reply_req_done(client_details_t *ct, int rcvid)
+/* 
+	Replies EOK to the train for a finished req, then removes it from the client's reqs.
+	If the reply fails, sends MsgError(err_code) instead so the client is not left blocked.
+	Returns EXIT_SUCCESS if the reply was sent, EXIT_FAILURE if MsgError had to be used.
+*/ 
+static int _reply_req_done(client_details_t *ct, int rcvid, int err_code)
 {
+	int rc = EXIT_SUCCESS;
 	reply_t rply = {.status = EOK, .err_msg = "", .data = 0};
 	if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
 	{
-		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d). Error is %s\n", rcvid, strerror(errno));
+		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d): %s. Sending MsgError(%d)\n", rcvid, strerror(errno), err_code);
+		MsgError(rcvid, err_code);
+		rc = EXIT_FAILURE;
 	}
+
 	reqs_remove(ct, rcvid);
+	return rc;
 }
 
-// Replies EFAULT to the train to inform of crossing controller failures, then removes it from the client's reqs
-static void _reply_req_fail(client_details_t *ct, int rcvid)
+/* 
+	Replies STOP_TRAIN (status EFAULT) to the train to inform of crossing controller failures, then removes it from the client's reqs.
+	If the reply fails, sends MsgError(err_code) instead so the client is not left blocked.
+	Returns EXIT_SUCCESS if the reply was sent, EXIT_FAILURE if MsgError had to be used.
+*/
+static int _reply_req_fail(client_details_t *ct, int rcvid, int err_code)
 {
+	int rc = EXIT_SUCCESS;
 	reply_t rply = {.status = EFAULT, .err_msg = "STOP_TRAIN", .data = 0};
 	if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
 	{
-		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d). Error is %s\n", rcvid, strerror(errno));
+		printf("[CrossServer: Warning] Failed to reply to req (rcvid %d): %s. Sending MsgError(%d)\n", rcvid, strerror(errno), err_code);
+		MsgError(rcvid, err_code);
+		rc = EXIT_FAILURE;
 	}
+
 	reqs_remove(ct, rcvid);
+	return rc;
 }
 
 /*
 	Processes the requests found in client_details_t of client_dict_t.
 	A finished req is replied to and removed.
 	May reply with a fail or a success depending on... well how i coded it
-	returns number of reqs replied too... not sure if helpful..
 */
 static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 {
-	int replied = 0;
+	//int replied = 0;
 	for(uint8_t i = 0; i < client_dict->count; i++)
 	{
 		client_details_t *ct = &client_dict->entries[i];
@@ -282,8 +328,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								{
 									pthread_mutex_unlock(&ev->mutex);
 
-									_reply_req_fail(ct, req->rcvid);
-									replied++;
+									_reply_req_fail(ct, req->rcvid, EFAULT);
+									//replied++;
 									continue;
 								}
 								// If it reached this point then the X1_FAULT is not on.
@@ -304,8 +350,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								{
 									pthread_mutex_unlock(&ev->mutex);
 
-									_reply_req_fail(ct, req->rcvid);
-									replied++;
+									_reply_req_fail(ct, req->rcvid, EFAULT);
+									//replied++;
 									continue;
 								}
 
@@ -331,8 +377,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								{
 									pthread_mutex_unlock(&ev->mutex);
 
-									_reply_req_fail(ct, req->rcvid);
-									replied++;
+									_reply_req_fail(ct, req->rcvid, EFAULT);
+									//replied++;
 									continue;
 								}
 
@@ -346,8 +392,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 							if (safe == 1)
 							{
 								req->state = REQ_STATE_DONE;
-								_reply_req_done(ct, req->rcvid);
-								replied++;
+								_reply_req_done(ct, req->rcvid, EFAULT);
+								//replied++;
 								continue; // slot j now holds a different req
 							}
 						}
@@ -362,8 +408,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								{
 									pthread_mutex_unlock(&ev->mutex);
 
-									_reply_req_fail(ct, req->rcvid);
-									replied++;
+									_reply_req_fail(ct, req->rcvid, EFAULT);
+									//replied++;
 									continue;
 								}
 
@@ -371,8 +417,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								pthread_cond_signal(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
 								req->state = REQ_STATE_DONE;
-								_reply_req_done(ct, req->rcvid);
-								replied++;
+								_reply_req_done(ct, req->rcvid, EFAULT);
+								//replied++;
 								continue; // slot j now holds a different req
 							}
 						}
@@ -387,8 +433,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								{
 									pthread_mutex_unlock(&ev->mutex);
 
-									_reply_req_fail(ct, req->rcvid);
-									replied++;
+									_reply_req_fail(ct, req->rcvid, EFAULT);
+									//replied++;
 									continue;
 								}
 
@@ -396,8 +442,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								pthread_cond_signal(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
 								req->state	= REQ_STATE_DONE;
-								_reply_req_done(ct, req->rcvid);
-								replied++;
+								_reply_req_done(ct, req->rcvid, EFAULT);
+								//replied++;
 								continue; // slot j now holds a different req
 							}
 						}
@@ -412,8 +458,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								pthread_cond_signal(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
 								req->state = REQ_STATE_DONE;
-								_reply_req_done(ct, req->rcvid);
-								replied++;
+								_reply_req_done(ct, req->rcvid, EFAULT);
+								//replied++;
 								continue;
 							}
 						}
@@ -426,7 +472,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 				break;
 		}
 	}
-	return replied;
+	//return replied;
+	return EXIT_SUCCESS;
 }
 
 // returns EXIT_SUCCESS if the message was handled. EXIT_FAILURE if it wasnt (i.e. end of the func was reached)
@@ -460,13 +507,11 @@ static int _my_message_handler(client_dict_t *client_dict, struct _msg_info *inf
 			if (reqs_add(ct, REQ_ADD_REPLACE, rq) == REQ_BUFF_FULL)
 			{
 				reply_t rply = {.status = EAGAIN, .err_msg = "REQ_BUFF_FULL", .data = 0};
-				// EOK indicates message was recieved by server, but they check .status = EGAIN and .err_msg
+				// EOK indicates message was recieved by server, but they check .status = EAGAIN and .err_msg
 				if (MsgReply(rcvid, EOK, &rply, sizeof(rply)) == -1)
 				{
-					if (errno != ESRCH)
-					{
-						MsgError(rcvid, EAGAIN);
-					}
+					printf("[CrossServer: Warning] Failed to reply to req (rcvid %d): %s. Sending MsgError(EFAULT)\n", rcvid, strerror(errno));
+					MsgError(rcvid, EAGAIN);
 				}
 				printf("[CrossServer: Warning] Train sent request (type %d) but the request buffer was full. Returned EAGAIN.\n", recv->msg.type);
 			}
@@ -542,6 +587,7 @@ void *subserver_central_messenger(void *arg)
 		return (void *)EXIT_FAILURE;
 	}
 
+	printf("[Central: Info] Successfully established connection to the central controller.\n");
 
 	int event_given = 0; // indicate if thread should sleep as there is no work
 	int should_sleep = 0;
@@ -549,6 +595,13 @@ void *subserver_central_messenger(void *arg)
 	uint32_t data = 0;
 
 	// Is while 1 a good idea? should there be an exit strategy?
+	/* failure handling:
+		a fatal error from sending pulses (i.e. not a EAGAIN)
+		stops the thread (because pulses no longer send)
+
+		however, if its just a server queue is full (or pulse queue is empty)
+		situation, sleeping helps.
+	*/
 	while (1)
 	{
 		event_given = 0; // indicate if thread should sleep as there is no work
