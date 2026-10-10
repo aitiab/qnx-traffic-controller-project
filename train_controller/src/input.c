@@ -128,6 +128,7 @@ void *train_sense_system(void *arg)
 
 			if (pthread_mutex_lock(&(input_obj.mutex)) == EOK)
 			{
+				// if old event is not yet read, and the old event was EMERG, then dont replace it.
 				if (input_obj.ready == 1 && input_obj.event == EMERG)
 				{
 					printf("[IO: Warning] Ignoring event %d. Train is already in EMERG state.\n", _event);
