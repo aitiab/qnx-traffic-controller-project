@@ -7,13 +7,13 @@
 #include "state_controller.h"
 
 // Size of the events circular buffer where input/sensor data goes
-#define EVENT_BUFF_SIZE 10
+//#define EVENT_BUFF_SIZE 10
 
 typedef struct {
 	pthread_mutex_t mutex;
 	pthread_cond_t 	cond;
-	uint8_t 		count;
-	events_t 		events[EVENT_BUFF_SIZE];
+	uint8_t 		ready; // 1 = ready, 0 = not ready
+	events_t 		event;
 	uint8_t 		nextRead;
 	uint8_t 		nextWrite;
 	uint8_t 		status;

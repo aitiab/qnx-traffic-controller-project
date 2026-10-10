@@ -14,8 +14,8 @@
 input_t input_obj = {
 	.mutex 		= PTHREAD_MUTEX_INITIALIZER,
 	.cond		= PTHREAD_COND_INITIALIZER,
-	.count 		= 0,
-	.events 	= {0},
+	.ready 		= 0,
+	.event 	= DEFAULT,
 	.nextRead 	= 0,
 	.nextWrite	= 0,
 	.status 	= STATUS_RUNNING
@@ -39,15 +39,17 @@ void readInput(events_t *ev)
 		// before it does die, it would call unlock_input_mutex to unlock the mutex
 		pthread_cleanup_push(unlock_input_mutex, NULL);
 
-		while (input_obj.status == STATUS_RUNNING && input_obj.count == 0)
+		while (input_obj.status == STATUS_RUNNING && input_obj.ready == 0)
 			pthread_cond_wait(&input_obj.cond, &input_obj.mutex);
 
 		// If input system status is running, then continue as normal
 		if (input_obj.status == STATUS_RUNNING)
 		{
-			*ev = input_obj.events[input_obj.nextRead];
-			input_obj.nextRead = (input_obj.nextRead + 1) % EVENT_BUFF_SIZE;
-			input_obj.count--;
+			// *ev = input_obj.events[input_obj.nextRead];
+			// input_obj.nextRead = (input_obj.nextRead + 1) % EVENT_BUFF_SIZE;
+			// input_obj.count--;
+			*ev = input_obj.event;
+			input_obj.ready = 0;
 		}
 		else // If input system status is not running, return a critical failure event to state machine
 		{
@@ -114,10 +116,10 @@ void *train_sense_system(void *arg)
 			{
 				_event = FIXED;
 			}
-			else if (strcasecmp(line, "") == 0)
-			{
-				_event = DEFAULT;
-			}
+			// else if (strcasecmp(line, "") == 0)
+			// {
+			// 	_event = DEFAULT;
+			// }
 			else
 			{
 				printf("[IO: Warning] Unknown command: %s\n", line);
@@ -126,32 +128,29 @@ void *train_sense_system(void *arg)
 
 			if (pthread_mutex_lock(&(input_obj.mutex)) == EOK)
 			{
-				if (input_obj.count < EVENT_BUFF_SIZE)
+				if (input_obj.ready == 1 && input_obj.event == EMERG)
 				{
-					input_obj.events[input_obj.nextWrite] = _event;
-					input_obj.nextWrite = (input_obj.nextWrite + 1) % EVENT_BUFF_SIZE;
-					input_obj.count++;
-
-					success_flag = 1;
-
-					pthread_cond_signal(&input_obj.cond);
+					printf("[IO: Warning] Ignoring event %d. Train is already in EMERG state.\n", _event);
+					pthread_mutex_unlock(&(input_obj.mutex));
+					continue;
 				}
-				else
-				{
-					success_flag = -1;
-				}
+				input_obj.event = _event;
+				input_obj.ready = 1;
+				pthread_cond_signal(&input_obj.cond);
 				pthread_mutex_unlock(&(input_obj.mutex));
 			}
 			else
 			{
 				printf("[IO: Warning] Failed to get mutex for adding event to input_obj. The event is dropped\n");
+				if (pthread_mutex_lock(&input_obj.mutex) == EOK)
+				{
+					input_obj.status = STATUS_FAILED;
+					pthread_cond_broadcast(&input_obj.cond); // send to all waiting on the cond
+					pthread_mutex_unlock(&input_obj.mutex);
+				}
+				printf("[IO: Error] Fatal error, event was dropped, stopping train_sense_system.\n");
+				return (void *)EXIT_FAILURE;
 			}
-
-			if (success_flag == -1)
-			{
-				printf("[IO: Warning] input_obj buffer is full. The new event is dropped\n");
-			}
-
 		}
 		else
 		{
