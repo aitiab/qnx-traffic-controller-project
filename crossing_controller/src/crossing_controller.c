@@ -55,6 +55,16 @@ int main(void) {
 		// Fail silently
 	}
 
+	// Crossing gates thread.
+	crossing_gates_controller_data_t gates_d = {.gates = &crossing_gates, .ev = &ev};
+	rc = pthread_create(&crossing_gates_tid, NULL, crossing_gates_controller, (void *)(&gates_d));
+	if (rc != EOK)
+	{
+		printf("[Main: Error] Failed to create thread for crossing_gates_controller: %s\nMoving to X1_FAULT.\n", strerror(rc));
+		master_move_to_X1_FAULT();
+		return EXIT_FAILURE;
+	}
+
 	server_crossing_controller_data _d = {.ev = &ev, .sem = &server_established_indicator};
 	// Crossing server: admits the train controller and handles its requests
 	void *crossing_server_status = (void *)NULL;
@@ -96,15 +106,6 @@ int main(void) {
 		// probs not unless im sending messages and elaborate processing of my requests.
 	}
 	
-	// Crossing gates thread.
-	crossing_gates_controller_data_t gates_d = {.gates = &crossing_gates, .ev = &ev};
-	rc = pthread_create(&crossing_gates_tid, NULL, crossing_gates_controller, (void *)(&gates_d));
-	if (rc != EOK)
-	{
-		printf("[Main: Error] Failed to create thread for crossing_gates_controller: %s\nMoving to X1_FAULT.\n", strerror(rc));
-		master_move_to_X1_FAULT();
-		return EXIT_FAILURE;
-	}
 
 	// Doesnt make sense to remove or cancel crossing or central if state transitioner crashes or fails to open.
 	// since talking to the train and central is still important

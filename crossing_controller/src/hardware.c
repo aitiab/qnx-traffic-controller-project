@@ -27,11 +27,12 @@ void *crossing_gates_controller(void *arg)
 				pthread_cond_wait(&gates->cond, &gates->mutex);
 			}
 
+			// compare before overwriting cur_state
+			if (gates->next_state != gates->cur_state)
+				change = 1;
 			gates->cur_state = gates->next_state;
 			gates->next_state = GATES_NOT_SET;
 			gates_state = gates->cur_state;
-			if (gates->next_state != gates->cur_state)
-				change = 1;
 			pthread_mutex_unlock(&gates->mutex);
 		}
 
@@ -46,7 +47,7 @@ void *crossing_gates_controller(void *arg)
 			// should it check if gate came down? or was already down?
 			ev->events[EV_GATE_DOWN] = (gates_state == GATES_LOWER) ? EV_GATE_DOWN_STATE_DOWN : 0;
 			ev->events[EV_GATE_RAISED] = (gates_state == GATES_RAISE) ? EV_GATE_RAISED_STATE_RAISED : 0;
-			pthread_cond_signal(&ev->cond);
+			pthread_cond_broadcast(&ev->cond);
 			pthread_mutex_unlock(&ev->mutex);
 		}
 	}
@@ -73,7 +74,7 @@ int deactivate_flashers(void)
 	next_state should be either GATES_LOWER or GATES_RAISE. Any other value will be ignored.
 
 	EXIT FAILURE if it fails to get the mutex for the crossing_gates_t 
-	If successful, the crossing_gates_t cur_state will be set to Gates lower
+	If successful, it set the desired next state and signalled to the crossing gates
 
 	Returns EXIT_SUCCESS if successful, otherwise returns EXIT_FAILURE
 */

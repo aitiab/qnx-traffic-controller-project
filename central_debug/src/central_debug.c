@@ -55,9 +55,8 @@ static const char *train_state_names[] = {
 
 /* Must match state_t in the crossing controller */
 static const char *crossing_state_names[] = {
-    "IDLE", "TRAIN_APPROACHING", "WARNING_ACTIVE", "GATES_LOWERING",
-    "GATES_DOWN", "TRAIN_CROSSING", "TRAIN_CLEAR_WAIT", "GATES_RAISING",
-    "X1_CLEAR", "X1_FAULT"
+    "IDLE", "TRAIN_APPROACHING", "ROADS_CLEAR", "WARNING_ACTIVE",
+    "TRAIN_CROSSING", "TRAIN_CLEAR_WAIT", "X1_CLEAR", "X1_FAULT"
 };
 
 #define COUNT_OF(a) ((int)(sizeof(a) / sizeof((a)[0])))

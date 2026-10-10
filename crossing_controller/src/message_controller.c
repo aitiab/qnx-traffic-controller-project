@@ -359,8 +359,8 @@ static int _my_req_process(client_dict_t *client_dict, events_t *ev)
 								// send message to the intersections
 								// depending on result of it, different states
 
-								ev->events[EV_WARNINGS_ACTIVE] = EV_WARNINGS_ACTIVE_STATE_INTERSECTIONS_NOTIFIED;
-								pthread_cond_signal(&ev->cond);
+								ev->events[EV_ROADS_CLEAR] = EV_ROADS_CLEAR_STATE_INTERSECTIONS_NOTIFIED;
+								pthread_cond_broadcast(&ev->cond);
 								pthread_mutex_unlock(&ev->mutex);
 								req->state = REQ_STATE_RUNNING_S2; // Intersections notified. State changed
 							}

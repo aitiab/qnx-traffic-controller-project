@@ -13,12 +13,10 @@ const char *state_to_string[] =
 {
 	[IDLE] 				= "IDLE",
 	[TRAIN_APPROACHING] = "TRAIN_APPROACHING",
+	[ROADS_CLEAR] 		= "ROADS_CLEAR",
 	[WARNING_ACTIVE] 	= "WARNING_ACTIVE",
-	[GATES_LOWERING] 	= "GATES_LOWERING",
-	[GATES_DOWN] 		= "GATES_DOWN",
 	[TRAIN_CROSSING] 	= "TRAIN_CROSSING",
 	[TRAIN_CLEAR_WAIT] 	= "TRAIN_CLEAR_WAIT",
-	[GATES_RAISING] 	= "GATES_RAISING",
 	[X1_CLEAR] 			= "X1_CLEAR",
 	[X1_FAULT] 			= "X1_FAULT"
 };
@@ -107,7 +105,7 @@ void *state_transitioner(void *arg)
 			case TRAIN_APPROACHING:
 			{
 				// Until warnings are active, wait on this state. Message controller will set 
-				// EV_WARNINGS_ACTIVE when intersections inform they are done
+				// EV_ROADS_CLEAR when intersections inform they are done
 				// If during this, the train reaches some error it will post the EV_X1_FAULT event
 				// Then you active your warnings as well (flashers)
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
@@ -154,6 +152,7 @@ void *state_transitioner(void *arg)
 					}
 					printf("[State: Error] Fatal fault encountered when activating flashers or lowering gates. Entering X1_FAULT.\n");
 					next_state = X1_FAULT;
+					break;
 				}
 
 				pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -173,7 +172,7 @@ void *state_transitioner(void *arg)
 					else
 					{
 						next_state = WARNING_ACTIVE;
-						ev->events[EV_GATE_DOWN] = 0;
+						//ev->events[EV_GATE_DOWN] = 0;
 					}
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
@@ -279,6 +278,7 @@ void *state_transitioner(void *arg)
 			// 		gates_up();
 			// 	break;
 			case X1_CLEAR:
+			{
 				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				uint8_t safe = 1;
 				if (deactivate_flashers() != EXIT_SUCCESS)
@@ -300,6 +300,7 @@ void *state_transitioner(void *arg)
 					}
 					printf("[State: Error] Fatal fault encountered when deactivating flashers or raising gates. Entering X1_FAULT.\n");
 					next_state = X1_FAULT;
+					break;
 				}
 
 				pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -321,6 +322,7 @@ void *state_transitioner(void *arg)
 				}
 				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 				break;
+			}
 			case X1_FAULT:
 			{
 				// ???? is this ok. idk. well see
