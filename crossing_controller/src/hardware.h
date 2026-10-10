@@ -28,6 +28,7 @@ typedef struct
 
 void *crossing_gates_controller(void *arg);
 int activate_flashers(void);
+int deactivate_flashers(void);
 int gates_req(crossing_gates_t *gates, uint8_t next_state);
 
 #endif /* SRC_HARDWARE_H_ */

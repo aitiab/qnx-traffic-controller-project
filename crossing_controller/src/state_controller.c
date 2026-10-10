@@ -113,7 +113,58 @@ void *state_transitioner(void *arg)
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
 					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
-					while (ev->events[EV_WARNINGS_ACTIVE] == 0 && ev->events[EV_X1_FAULT] == 0)
+					while (ev->events[EV_ROADS_CLEAR] == 0 && ev->events[EV_X1_FAULT] == 0)
+						pthread_cond_wait(&ev->cond, &ev->mutex);
+					if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+					{
+						next_state = X1_FAULT;
+					}
+					else
+					{
+						next_state = ROADS_CLEAR;
+						ev->events[EV_ROADS_CLEAR] = 0;
+					}
+					//pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
+				}
+				
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+				break;
+			}
+			case ROADS_CLEAR:
+			{
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+				uint8_t safe = 1;
+				if (activate_flashers() != EXIT_SUCCESS)
+				{
+					safe = 0;
+				}
+				if (gates_req(gates, GATES_LOWER) != EXIT_SUCCESS)
+				{
+					safe = 0;
+				}
+
+				if (safe == 0)
+				{
+					if (pthread_mutex_lock(&ev->mutex) == EOK)
+					{
+						ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
+						pthread_cond_broadcast(&ev->cond);
+						pthread_mutex_unlock(&ev->mutex);
+					}
+					printf("[State: Error] Fatal fault encountered when activating flashers or lowering gates. Entering X1_FAULT.\n");
+					next_state = X1_FAULT;
+				}
+
+				pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+				// what happens if the gates thread never sends the cond_signal? then the state machine is stuck here forever.
+				// although the train would have timed out and sent a fault to the crossing server,
+				// which would have set the EV_X1_FAULT event, which would have woken this up
+				// but thats more a sideeffect rather than a design... i would but i dont have time.
+				if (pthread_mutex_lock(&ev->mutex) == EOK)
+				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
+					while (ev->events[EV_GATE_DOWN] == 0 && ev->events[EV_X1_FAULT] == 0)
 						pthread_cond_wait(&ev->cond, &ev->mutex);
 					if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
 					{
@@ -122,62 +173,46 @@ void *state_transitioner(void *arg)
 					else
 					{
 						next_state = WARNING_ACTIVE;
-						ev->events[EV_WARNINGS_ACTIVE] = 0;
+						ev->events[EV_GATE_DOWN] = 0;
 					}
-					//pthread_mutex_unlock(&ev->mutex);
 					pthread_cleanup_pop(1); // unlock the mutex
 				}
-				
+
 				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-				// If while activating flashers a critical failure happened set the EV_X1_FAULT event and go to X1_FAULT state
-				// setting the fault state will inform the train that a fault has occured.
-				// **Yes both use the same fault event**
-				if (activate_flashers() != EXIT_SUCCESS)
-				{
-					if (pthread_mutex_lock(&ev->mutex) == EOK)
-					{
-						ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
-						pthread_cond_broadcast(&ev->cond);
-						pthread_mutex_unlock(&ev->mutex);
-					}
-					printf("[State: Error] Fatal fault encountered when activating flashers. Entering X1_FAULT.\n");
-					next_state = X1_FAULT;
-					// Need to deal with situation i fail to get the mutex lock?
-					// Should i cancel the state_transitioner? with exit_failure???
-				}
+
 				break;
 			}
+			// case WARNING_ACTIVE:
+			// {
+			// 	// ??? delay???
+			// 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			// 	next_state = GATES_LOWERING;
+			// 	if (gates_down() != EXIT_SUCCESS)
+			// 	{
+			// 		if (pthread_mutex_lock(&ev->mutex) == EOK)
+			// 		{
+			// 			ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
+			// 			pthread_cond_broadcast(&ev->cond);
+			// 			pthread_mutex_unlock(&ev->mutex);
+			// 		}
+			// 		printf("[State: Error] Fatal fault encountered when closing gates. Entering X1_FAULT.\n");
+			// 		next_state = X1_FAULT;
+			// 	}
+			// 	break;
+			// }
+			// case GATES_LOWERING:
+			// {
+			// 	// Tells the server's APPROACH_NOTIFY req (RUNNING_S2) that it is safe to reply to the train
+			// 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			// 	if (pthread_mutex_lock(&ev->mutex) == EOK)
+			// 	{
+			// 		ev->events[EV_GATE_DOWN] = EV_GATE_DOWN_STATE_DOWN;
+			// 		pthread_mutex_unlock(&ev->mutex);
+			// 	}
+			// 	next_state = GATES_DOWN;
+			// 	break;
+			// }
 			case WARNING_ACTIVE:
-			{
-				// ??? delay???
-				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-				next_state = GATES_LOWERING;
-				if (gates_down() != EXIT_SUCCESS)
-				{
-					if (pthread_mutex_lock(&ev->mutex) == EOK)
-					{
-						ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
-						pthread_cond_broadcast(&ev->cond);
-						pthread_mutex_unlock(&ev->mutex);
-					}
-					printf("[State: Error] Fatal fault encountered when closing gates. Entering X1_FAULT.\n");
-					next_state = X1_FAULT;
-				}
-				break;
-			}
-			case GATES_LOWERING:
-			{
-				// Tells the server's APPROACH_NOTIFY req (RUNNING_S2) that it is safe to reply to the train
-				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-				if (pthread_mutex_lock(&ev->mutex) == EOK)
-				{
-					ev->events[EV_GATE_DOWN] = EV_GATE_DOWN_STATE_DOWN;
-					pthread_mutex_unlock(&ev->mutex);
-				}
-				next_state = GATES_DOWN;
-				break;
-			}
-			case GATES_DOWN:
 			{
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
@@ -224,35 +259,78 @@ void *state_transitioner(void *arg)
 			}
 			case TRAIN_CLEAR_WAIT:
 				// sleep() for some time?... something that can be woken tho... cond_timed_wait()?
-				next_state = GATES_RAISING;
+				next_state = X1_CLEAR;
 				break;
-			case GATES_RAISING:
+			// case GATES_RAISING:
+			// 	if (pthread_mutex_lock(&ev->mutex) == EOK)
+			// 	{
+			// 		if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+			// 		{
+			// 			next_state = X1_FAULT;
+			// 		}
+			// 		else
+			// 		{
+			// 			next_state = X1_CLEAR;
+			// 		}
+			// 		pthread_mutex_unlock(&ev->mutex);
+			// 	}
+			// 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			// 	if (next_state == X1_CLEAR)
+			// 		gates_up();
+			// 	break;
+			case X1_CLEAR:
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+				uint8_t safe = 1;
+				if (deactivate_flashers() != EXIT_SUCCESS)
+				{
+					safe = 0;
+				}
+				if (gates_req(gates, GATES_RAISE) != EXIT_SUCCESS)
+				{
+					safe = 0;
+				}
+
+				if (safe == 0)
+				{
+					if (pthread_mutex_lock(&ev->mutex) == EOK)
+					{
+						ev->events[EV_X1_FAULT] = EV_X1_FAULT_STATE_ON;
+						pthread_cond_broadcast(&ev->cond);
+						pthread_mutex_unlock(&ev->mutex);
+					}
+					printf("[State: Error] Fatal fault encountered when deactivating flashers or raising gates. Entering X1_FAULT.\n");
+					next_state = X1_FAULT;
+				}
+
+				pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
 				if (pthread_mutex_lock(&ev->mutex) == EOK)
 				{
-					if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
+					while (ev->events[EV_GATE_RAISED] == 0 && ev->events[EV_X1_FAULT] == 0)
+						pthread_cond_wait(&ev->cond, &ev->mutex);
+					if (ev->events[EV_X1_FAULT])
 					{
 						next_state = X1_FAULT;
 					}
 					else
 					{
-						next_state = X1_CLEAR;
+						next_state = IDLE;
+						ev->events[EV_GATE_RAISED] = 0;
 					}
-					pthread_mutex_unlock(&ev->mutex);
+					pthread_cleanup_pop(1); // unlock the mutex
 				}
 				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-				if (next_state == X1_CLEAR)
-					gates_up();
-				break;
-			case X1_CLEAR:
-				// some message
-				next_state = IDLE;
 				break;
 			case X1_FAULT:
 			{
 				// ???? is this ok. idk. well see
 				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+				// the warnings below arent checked for errors
+				// therefore they may not be in the safe state.
+				// but the event X1_FAULT is set so the train will be informed of the fault and stop
+				// the next time the train tries to send a request, it will be replied with STOP_TRAIN
 				activate_flashers();
-				gates_down();
+				gates_req(gates, GATES_LOWER);
 				return (void *)EXIT_FAILURE;
 				break;
 			}

@@ -16,7 +16,9 @@ void *crossing_gates_controller(void *arg)
 
 	while(1)
 	{
+		// avoid printf in mutex
 		uint8_t gates_state = GATES_NOT_SET;
+		uint8_t change = 0;
 		if (pthread_mutex_lock(&gates->mutex) == EOK)
 		{
 			// Wait until a change of state is requested by the crossing state machine
@@ -28,15 +30,22 @@ void *crossing_gates_controller(void *arg)
 			gates->cur_state = gates->next_state;
 			gates->next_state = GATES_NOT_SET;
 			gates_state = gates->cur_state;
+			if (gates->next_state != gates->cur_state)
+				change = 1;
 			pthread_mutex_unlock(&gates->mutex);
 		}
 
-		printf("[HW] Crossing gates state changed to %s\n", (gates_state == GATES_LOWER) ? "GATES_LOWER" : "GATES_RAISE");
-		//sleep(1); // simulate the time it takes to lower or raise the gates
+		if (change  == 1)
+		{
+			printf("[HW] Crossing gates state changed to %s\n", (gates_state == GATES_LOWER) ? "GATES_LOWER" : "GATES_RAISE");
+			//sleep(1); // simulate the time it takes to lower or raise the gates
+		}
 
 		if (pthread_mutex_lock(&ev->mutex) == EOK)
 		{
+			// should it check if gate came down? or was already down?
 			ev->events[EV_GATE_DOWN] = (gates_state == GATES_LOWER) ? EV_GATE_DOWN_STATE_DOWN : 0;
+			ev->events[EV_GATE_RAISED] = (gates_state == GATES_RAISE) ? EV_GATE_RAISED_STATE_RAISED : 0;
 			pthread_cond_signal(&ev->cond);
 			pthread_mutex_unlock(&ev->mutex);
 		}
@@ -48,6 +57,12 @@ void *crossing_gates_controller(void *arg)
 int activate_flashers(void)
 {
 	printf("[HW] Flashers activated.\n");
+	return EXIT_SUCCESS;
+}
+
+int deactivate_flashers(void)
+{
+	printf("[HW] Flashers deactivated.\n");
 	return EXIT_SUCCESS;
 }
 
