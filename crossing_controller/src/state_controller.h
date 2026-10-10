@@ -43,10 +43,15 @@ typedef struct
 // extern events_t ev; ///
 // --------------------------- END Events Definition ------------------------------- //
 
+struct crossing_gates_t;
+
+typedef struct
+{
+	events_t *ev;
+	struct crossing_gates_t *gates;
+} state_transitioner_data_t;
+
 void *state_transitioner(void *arg);
 int state_transition_message(void);
-int activate_flashers(void);
-int gates_down(void);
-void gates_up(void);
 
 #endif /* SRC_STATE_CONTROLLER_H_ */

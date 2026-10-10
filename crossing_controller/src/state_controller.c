@@ -5,6 +5,7 @@
 
 #include "state_controller.h"
 #include "message_controller.h"
+#include "hardware.h"
 
 
 // --------------------------- START Crossing States Definition ------------------------------- //
@@ -57,11 +58,13 @@ static void unlock_input_mutex(void *arg)
 	pthread_mutex_unlock(&ev->mutex);
 }
 
-// Crossing state machine thread. arg is the shared events_t (&ev)
+// Crossing state machine thread. arg is a state_transitioner_data_t (shared events_t + crossing gates)
 // Pulses the crossing server (self_con_details) every loop so it reruns its req processing
 void *state_transitioner(void *arg)
 {
-	events_t *ev = (events_t *)arg;
+	state_transitioner_data_t *_d = (state_transitioner_data_t *)arg;
+	events_t *ev = _d->ev;
+	crossing_gates_t *gates = _d->gates;
 
 	while(1)
 	{
@@ -267,20 +270,4 @@ void *state_transitioner(void *arg)
 	}
 
 	return NULL;
-}
-
-int activate_flashers(void)
-{
-	printf("[HW] Flashers activated.\n");
-	return EXIT_SUCCESS;
-}
-
-int gates_down(void)
-{
-	printf("[HW] Gates down.\n");
-	return EXIT_SUCCESS;
-}
-void gates_up(void)
-{
-	printf("[HW] Gates up.\n");
 }

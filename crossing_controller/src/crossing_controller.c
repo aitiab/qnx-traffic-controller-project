@@ -11,9 +11,11 @@
 #include "message_handling.h"
 #include "state_controller.h"
 #include "message_controller.h"
+#include "hardware.h"
 
 
 events_t ev = {.events = {0}, .mutex = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER};
+crossing_gates_t crossing_gates = {.cur_state = GATES_RAISE, .next_state = GATES_NOT_SET, .mutex = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER};
 
 void master_move_to_X1_FAULT(void)
 {
@@ -30,7 +32,7 @@ void master_move_to_X1_FAULT(void)
 	state_transition_message();
 	cur_state = next_state;
 	activate_flashers();
-	gates_down();
+	gates_req(&crossing_gates, GATES_LOWER);
 
 	// pretty bad...
 	// maybe should periodically sent updates to central controller?
@@ -43,7 +45,7 @@ int main(void) {
 	sem_t server_established_indicator;
 	sem_init(&server_established_indicator, 0, 0);
 
-	pthread_t crossing_server_tid, state_transitioner_tid, central_messenger_tid;
+	pthread_t crossing_server_tid, state_transitioner_tid, central_messenger_tid, crossing_gates_tid;
 	int rc;
 
 	rc = pthread_create(&central_messenger_tid, NULL, subserver_central_messenger, NULL);
@@ -94,10 +96,21 @@ int main(void) {
 		// probs not unless im sending messages and elaborate processing of my requests.
 	}
 	
+	// Crossing gates thread.
+	crossing_gates_controller_data_t gates_d = {.gates = &crossing_gates, .ev = &ev};
+	rc = pthread_create(&crossing_gates_tid, NULL, crossing_gates_controller, (void *)(&gates_d));
+	if (rc != EOK)
+	{
+		printf("[Main: Error] Failed to create thread for crossing_gates_controller: %s\nMoving to X1_FAULT.\n", strerror(rc));
+		master_move_to_X1_FAULT();
+		return EXIT_FAILURE;
+	}
+
 	// Doesnt make sense to remove or cancel crossing or central if state transitioner crashes or fails to open.
 	// since talking to the train and central is still important
+	state_transitioner_data_t st_d = {.ev = &ev, .gates = &crossing_gates};
 	void *state_transitioner_status = (void *)NULL;
-	rc = pthread_create(&state_transitioner_tid, NULL, state_transitioner, (void *)(&ev));
+	rc = pthread_create(&state_transitioner_tid, NULL, state_transitioner, (void *)(&st_d));
 	if (rc != EOK)
 	{
 		printf("[Main: Error] Failed to create thread for state_transitioner: %s\nExiting with FAIL\n", strerror(rc));

@@ -134,7 +134,8 @@ int send_message(server_con_details_t *details, mh_msg_t *msg, reply_t *reply);
 
 #define SEND_TIMED_OUT_NOT_RECEIVED 1
 #define SEND_REPLY_EINTR 2 // could be from unblock or an actual EINTR errorMsg although would be a bad design?
-#define SEND_OTHER_ERROR 3
+#define SEND_REPLY_EFAULT 3 // could be from server sending a MsgError with EFAULT, or some other way?
+#define SEND_OTHER_ERROR 4
 int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *reply, uint64_t ms_timeout);
 #define SEND_ADMIT_TIMEOUT_MS 500
 int send_admit_message(server_con_details_t *details, int SERVER_ADMITTANCE_CODE, reply_t *reply);

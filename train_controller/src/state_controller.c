@@ -24,17 +24,13 @@ state_t next_state 	= NRML;
 	Notifies the crossing controller that a fault has occured to the train
 	Returns nothing. You should manage train transitions to safe fault states yourself 
 */
-static void _notify_fault_to_crossing(server_con_details_t *crossing_details)
+void notify_fault_to_crossing(server_con_details_t *crossing_details)
 {
 	mh_msg_t fault_notify_msg = {.client_identifier = crossing_details->client_identifier, .type = FAULT_NOTIFY, .subtype = 0, .data = 0};
 	reply_t fault_reply = {0};
 	int rc = send_message_timed(crossing_details, &fault_notify_msg, &fault_reply, MS_NOTIFY_FAULT);
-	if (rc != EXIT_SUCCESS)
-	{
-		// If fault notification fails,
-		printf("[Notify: Error] Failed to notify crossing of FAULT.\n");
-	}
-	else
+	
+	if (rc == EXIT_SUCCESS)
 	{
 		// if the reply from crossing is EOK (NOTIFIED) or EAGAIN (REQ_BUFF_FULL) then put train in SYS_FAIL
 		if (fault_reply.status == EOK)
@@ -46,6 +42,11 @@ static void _notify_fault_to_crossing(server_con_details_t *crossing_details)
 			printf("[Notify: Error] Crossing failed to acknowledge fault notification.\n");
 		}
 	}
+	else
+	{
+		// If fault notification fails,
+		printf("[Notify: Error] Failed to notify crossing of FAULT.\n");
+	}
 }
 
 /*
@@ -53,21 +54,16 @@ static void _notify_fault_to_crossing(server_con_details_t *crossing_details)
 	Returns EXIT_FAILURE if send fails (due to errors provided by send_message_timed)
 	or returns the reply.status when send_message_timed was successful
 */
-static int _notify_crossing(server_con_details_t *crossing_details, int notify_event, int MS_SEND_MESSAGE_TIMEOUT)
+int notify_crossing(server_con_details_t *crossing_details, int notify_event, int MS_SEND_MESSAGE_TIMEOUT)
 {
 	mh_msg_t notify_msg = {.client_identifier = crossing_details->client_identifier, .type = notify_event, .subtype = 0, .data = 0};
 	reply_t notify_reply = {0};
 	int rc = send_message_timed(crossing_details, &notify_msg, &notify_reply, MS_SEND_MESSAGE_TIMEOUT);
-	if (rc != EXIT_SUCCESS)
-	{
-		// If approach notification fails, put train in SYS_FAIL state next
-		printf("[Notify: Warning] Failed to notify crossing server of event %d.\n", notify_event);
-		return EXIT_FAILURE;
-	}
-	else
+	
+	if (rc == EXIT_SUCCESS)
 	{
 		// if the reply from crossing is EFAULT (STOP_TRAIN) or EAGAIN (REQ_BUFF_FULL) then put train in SYS_FAIL
-		if (notify_reply.status == EFAULT)
+		if (notify_reply.status == EFAULT || rc == SEND_REPLY_EFAULT)
 		{
 			printf("[Notify: Warning] Crossing server notified us to stop the train.\n");
 		}
@@ -77,6 +73,12 @@ static int _notify_crossing(server_con_details_t *crossing_details, int notify_e
 		}
 
 		return notify_reply.status;
+	}
+	else
+	{
+		// If approach notification fails, put train in SYS_FAIL state next
+		printf("[Notify: Warning] Failed to notify crossing server of event %d.\n", notify_event);
+		return EXIT_FAILURE;
 	}
 }
 
@@ -101,7 +103,7 @@ int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 		{
 			if (cur_state == NRML)
 			{
-				int rc = _notify_crossing(crossing_details, APPROACH_NOTIFY, MS_NOTIFY_APPROACH);
+				int rc = notify_crossing(crossing_details, APPROACH_NOTIFY, MS_NOTIFY_APPROACH);
 				if (rc != EOK)
 				{
 					// If approach notification fails, put train in SYS_FAIL state next
@@ -134,8 +136,8 @@ int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 			// any emergency notifies the crossing and puts the train in SYS_FAIL
 			// yes this is not ideal... maybe it should have a bit more difference to CRITICAL_FAILURE
 			// (same as CRITICAL_FAILURE for now)
-			_notify_fault_to_crossing(crossing_details);
-			// sets next_state = SYS_FAIL
+			//printf("[Event: Info] EMERG event. Stopping train, notifying crossing of fault and transitioning to SYS_FAIL\n");
+			//notify_fault_to_crossing(crossing_details);
 			next_state = SYS_FAIL;
 			printf("[State] (%d) %s -> (%d) %s  (on EMERG event)\n", cur_state,
 					state_to_string[cur_state], next_state, state_to_string[next_state]);
@@ -144,7 +146,7 @@ int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 		case CROSSNG:
 			if (cur_state == APRCH)
 			{
-				int rc = _notify_crossing(crossing_details, CROSSING_NOTIFY, MS_NOTIFY_CROSSING);
+				int rc = notify_crossing(crossing_details, CROSSING_NOTIFY, MSnotify_crossing);
 				if (rc != EOK)
 				{
 					// If approach notification fails, put train in SYS_FAIL state next
@@ -177,7 +179,7 @@ int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 		case PAST:
 			if (cur_state == CROSS)
 			{
-				int rc = _notify_crossing(crossing_details, EXIT_NOTIFY, MS_NOTIFY_EXIT);
+				int rc = notify_crossing(crossing_details, EXIT_NOTIFY, MS_NOTIFY_EXIT);
 				if (rc != EOK)
 				{
 					// If approach notification fails, put train in SYS_FAIL state next
@@ -212,7 +214,7 @@ int state_transitioner(events_t *ev, server_con_details_t *crossing_details)
 			printf("[Event: Info] Ignoring FIXED event. No emergency states to recover from\n");
 			break;
 		case CRITICAL_FAILURE:
-			_notify_fault_to_crossing(crossing_details);
+			//notify_fault_to_crossing(crossing_details);
 			// sets next_state = SYS_FAIL
 			next_state = SYS_FAIL;
 

@@ -26,6 +26,9 @@ typedef enum {DEFAULT = 0, APRCHNG, EMERG, CROSSNG, PAST, FIXED, CRITICAL_FAILUR
 // FAULT_NOTIFY is replied to straight away. Kept short so the train reaches SYS_FAIL quickly even if the crossing is unresponsive
 #define MS_NOTIFY_FAULT 1000
 
+void notify_fault_to_crossing(server_con_details_t *crossing_details);
+int notify_crossing(server_con_details_t *crossing_details, int notify_event, int MS_SEND_MESSAGE_TIMEOUT);
+
 int state_transitioner(events_t *ev, server_con_details_t *crossing_details);
 
 #endif /* SRC_STATE_CONTROLLER_H_ */

@@ -186,7 +186,8 @@ int send_message(server_con_details_t *details, mh_msg_t *msg, reply_t *reply)
 	Performs a timed SendMsg. Provide it timeout in milliseconds
 	Returns 1 (SEND_TIMED_OUT_NOT_RECEIVED) if MsgSend set errno to ETIMEOUT,
 	returns 2 (SEND_REPLY_EINTR) if MsgSend set errno to EINTR (could be due to UNBLOCK or intentionally MsgReply??)
-	returns 3 (SEND_OTHER_ERROR) if MsgSend set errno to something other than above
+	return  3 (SEND_REPLY_EFAULT) if MsgSend set errno to EFAULT (from MsgError sent by server or some other way???)
+	returns 4 (SEND_OTHER_ERROR) if MsgSend set errno to something other than above
 	Returns EXIT_FAILURE when TimeTimeout fails.
 	returns 0 (EXIT_SUCESS) if MsgSend was success.
 */ 
@@ -211,6 +212,11 @@ int send_message_timed(server_con_details_t *details, mh_msg_t *msg, reply_t *re
 			{
 				printf("[MH: Error] Failed to send timed message to \"%s\"... Msg was not received by server before time out.\n", details->sname);
 				return SEND_TIMED_OUT_NOT_RECEIVED;
+			}
+			else if (errno == EFAULT)
+			{
+				printf("[MH: Error] Failed to send timed message to \"%s\"... Server sent back a MsgError with EFAULT. Possibly indicating crossing reached a fault.\n", details->sname);
+				return  SEND_REPLY_EFAULT;
 			}
 			else if (errno == EINTR)
 			{
@@ -277,15 +283,27 @@ int send_safe_reply(client_dict_t *dict, int rcvid, int status, reply_t *reply)
 }
 
 
-
+/*
+	cleans up the connection to the server as described in details (server_con_details_t)
+	Returns EOK if successful, otherwise returns errno (from name_close)
+*/
 int cleanup_connection(server_con_details_t *details)
 {
 	if (details->established)
 	{
-		if (name_close(details->coid) == -1)
+		int limit = 5; // max 5 retries
+		int rc = name_close(details->coid);
+		while (rc == -1 && errno == EINTR && limit > 0)
+		{
+			printf("[MH: Warning] name_close on \"%s\" was interrupted by a signal. Retrying...\n", details->sname);
+			rc = name_close(details->coid);
+			limit--;
+		}
+
+		if (rc == -1)
 		{
 			printf("[MH: Error] Failed to close coid (%d) to \"%s\"\nError is %s\n", details->coid, details->sname, strerror(errno));
-			return EXIT_FAILURE;
+			return errno;
 		}
 		else
 		{
@@ -294,7 +312,7 @@ int cleanup_connection(server_con_details_t *details)
 		}
 	}
 
-	return EXIT_SUCCESS;
+	return EOK;
 }
 
 

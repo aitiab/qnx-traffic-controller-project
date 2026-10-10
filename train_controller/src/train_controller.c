@@ -24,6 +24,26 @@ static void wait_for_event(events_t *ev)
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 }
 
+static void _sys_fail_handler(events_t *ev, server_con_details_t *crossing_details)
+{
+	// If the state machine reached SYS_FAIL, then notify the crossing server of the fault and cleanup the connection
+	printf("[Main: Info] Train controller has reached SYS_FAIL state...\n");
+	printf("[Main: Info] Train stopped...\n");
+	notify_fault_to_crossing(crossing_con_details);
+	printf("[Main: Info] Crossing has been notified of fault...\n");
+
+
+	// should tell the crossing that train has broken link so it should go into its fault mode.
+	if (cleanup_connection(crossing_con_details) != EOK)
+	{
+		printf("[Main: Warning] Failed to cleanup connection to crossing server. Error is %s\n", strerror(errno));
+	}
+	else
+	{
+		printf("[Main: Info] Cleaned up connection to crossing server.\n");
+	}
+}
+
 // need to change the name now that its not only just a sm controller...
 // maybe subserver? soft_controller? child_controller?
 // Child state machine. Runs until it reaches SYS_FAIL or is cancelled by main.
@@ -90,9 +110,10 @@ void *child_train_controller(void *arg)
 		}
 
 		cur_state = next_state;
-
-
 	}
+
+	// If the state machine reached SYS_FAIL, then notify the crossing server of the fault and cleanup the connection
+	_sys_fail_handler(&ev, &crossing_con_details);
 
 	// return nuLL or something else?
 	return (cur_state == SYS_FAIL) ? (void *)EXIT_FAILURE : (void *)EXIT_SUCCESS;
@@ -122,7 +143,6 @@ int main(void) {
 		printf("[Main: Error] Failed to create thread for state machine: %s\nExiting with FAIL\n", strerror(rc));
 		cur_state = SYS_FAIL;
 		child_train_controller_status = (void *)EXIT_FAILURE;
-
 
 		// Should the main thread exit_failure? or should it go into some infinite loop? 
 		return EXIT_FAILURE;
@@ -187,13 +207,16 @@ int main(void) {
 		// so werid. but i guess forward thinking
 		// if train_sense_system failed then closed (status = EXIT_FAILURE), or thread failed to join (status = NULL)
 		// then place train in SYS_FAIL state.
-		if (((intptr_t)train_sense_status == EXIT_FAILURE || train_sense_status == NULL) && cur_state != SYS_FAIL)
+		if (((intptr_t)train_sense_status == EXIT_FAILURE) && cur_state != SYS_FAIL)
 		{
 			events_t ev = CRITICAL_FAILURE;
 			int message = state_transitioner(&ev, &crossing_con_details);
 			cur_state = next_state;
 			if (message != -1)
 				add_to_log_buffer(&pulses_to_central, (uint32_t)message);
+
+			// If the state machine reached SYS_FAIL, then notify the crossing server of the fault and cleanup the connection
+			_sys_fail_handler(&ev, &crossing_con_details);
 		}
 	}
 	else if (thread_exited == 2)
