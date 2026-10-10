@@ -40,7 +40,22 @@ void master_move_to_X1_FAULT(void)
 		sleep(5);
 }
 int main(void) {
+
+	// ---------------------------------------- //
+	// Configure important global things for the controller 
 	errno = EOK; // do i need this?
+
+	pthread_condattr_t _cond_attr;
+	pthread_condattr_init(&_cond_attr);
+	pthread_condattr_setclock(&_cond_attr, CLOCK_MONOTONIC);
+	if (pthread_cond_init(&ev.cond, &_cond_attr) != EOK)
+	{
+		printf("[Main: Error] Failed to init cond for events_t: %s\nMoving to X1_FAULT.\n", strerror(errno));
+		master_move_to_X1_FAULT();
+		return EXIT_FAILURE;
+	}
+	// ---------------------------------------- //
+
 
 	sem_t server_established_indicator;
 	sem_init(&server_established_indicator, 0, 0);

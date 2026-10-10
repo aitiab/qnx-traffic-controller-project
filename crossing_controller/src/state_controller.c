@@ -257,9 +257,42 @@ void *state_transitioner(void *arg)
 				break;
 			}
 			case TRAIN_CLEAR_WAIT:
+			{
 				// sleep() for some time?... something that can be woken tho... cond_timed_wait()?
-				next_state = X1_CLEAR;
+				
+				// absolute: <wakeup_time> time from now
+				struct timespec wakeup_time;
+				clock_gettime(CLOCK_MONOTONIC, &wakeup_time);
+				wakeup_time.tv_sec += 5; // Need to adjust
+				wakeup_time.tv_msec += 0; // 
+				wakeup_time.tv_nsec = 0; // 
+
+				if (pthread_mutex_lock(&ev->mutex) == EOK)
+				{
+					pthread_cleanup_push(unlock_input_mutex, (void *)ev);
+					int rc = EOK;
+					// keep sleeping until either timeout or a fault event is set.
+					while (ev->events[EV_X1_FAULT] == 0 && rc != ETIMEDOUT)
+					{
+						rc = pthread_cond_timedwait(&ev->cond, &ev->mutex, &wakeup_time);
+					}
+					// if it was a fault then below is set.
+					if (ev->events[EV_X1_FAULT] == EV_X1_FAULT_STATE_ON)
+					{
+						next_state = X1_FAULT;
+					}
+					else
+					{
+						// if it reached here then it was a timeout.
+						next_state = X1_CLEAR;
+					}
+					pthread_cleanup_pop(1); // unlock the mutex
+				}
+				pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
+				//next_state = X1_CLEAR;
 				break;
+			}
 			// case GATES_RAISING:
 			// 	if (pthread_mutex_lock(&ev->mutex) == EOK)
 			// 	{
